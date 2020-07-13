@@ -1,2 +1,2 @@
 # slurm_scripts
-SLURM script collection
+A shared repository for working slum scripts
