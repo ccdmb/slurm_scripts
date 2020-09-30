@@ -15,13 +15,13 @@
 module load singularity
 module load cuda
 
-# Image from https://hub.docker.com/r/genomicpariscentre/guppy-gpu/tags
-# Downloaded via singularity pull docker://genomicpariscentre/guppy-gpu:3.6.1
-# They do not yet have guppy 4.0.11 so I built the image myself using their Dockerfile
+# Image from hhttps://hub.docker.com/r/jwdebler/guppy-gpu/tags
+# Downloaded via singularity pull docker://jwdebler/guppy-gpu:4.0.15
+
 # Adjust flocell, kit and barcode as required. 
 
 srun -n 1 --export=all --gres=gpu:1 \
-singularity exec --nv /group/y95/jdebler/guppy-gpu_4.0.11.sif \ 
+singularity exec --nv /group/y95/jdebler/guppy-gpu_4.0.15.sif \ 
 guppy_basecaller \
 -i /scratch/y95/jdebler/input/fast5 \
 -s /scratch/y95/jdebler/output/fastq \
