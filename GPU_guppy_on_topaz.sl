@@ -16,12 +16,13 @@ module load singularity
 module load cuda
 
 # Image from https://hub.docker.com/r/jwdebler/guppy-gpu/tags
-# Downloaded via singularity pull docker://jwdebler/guppy-gpu:4.2.2
+# Downloaded via singularity pull docker://jwdebler/guppy-gpu:4.0.15
+# There is something different with 4.2.2, it doesn't demultiplex barcodes properly
 
 # Adjust flocell, kit and barcode as required. 
 
 srun -n 1 --export=all --gres=gpu:1 \
-singularity exec --nv /group/y95/jdebler/guppy-gpu_4.2.2.sif guppy_basecaller \
+singularity exec --nv /group/y95/jdebler/guppy-gpu_4.0.15.sif guppy_basecaller \
 -i /scratch/y95/jdebler/input/fast5 \
 -s /scratch/y95/jdebler/output/fastq \
 --flowcell FLO-MIN106 \
