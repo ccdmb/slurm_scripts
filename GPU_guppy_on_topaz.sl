@@ -22,7 +22,7 @@ module load cuda
 # Adjust flocell, kit and barcode as required. 
 
 srun -n 1 --export=all --gres=gpu:1 \
-singularity exec --nv /group/y95/jdebler/guppy-gpu_4.0.15.sif guppy_basecaller \
+singularity exec --nv /group/y95/jdebler/guppy-gpu_4.2.2.sif guppy_basecaller \
 -i /scratch/y95/jdebler/input/fast5 \
 -s /scratch/y95/jdebler/output/fastq \
 --flowcell FLO-MIN106 \
@@ -30,5 +30,6 @@ singularity exec --nv /group/y95/jdebler/guppy-gpu_4.0.15.sif guppy_basecaller \
 --barcode_kits EXP-NBD104 \
 --trim_barcodes \
 --detect_mid_strand_barcodes \
+--min_score_mid_barcodes 60 \
 --compress_fastq \
 -x cuda:all
