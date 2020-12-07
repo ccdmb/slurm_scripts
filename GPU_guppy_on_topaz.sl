@@ -16,8 +16,9 @@ module load singularity
 module load cuda
 
 # Image from https://hub.docker.com/r/jwdebler/guppy-gpu/tags
-# Downloaded via singularity pull docker://jwdebler/guppy-gpu:4.0.15
-# There is something different with 4.2.2, it doesn't demultiplex barcodes properly
+# Downloaded via singularity pull docker://jwdebler/guppy-gpu:4.2.2
+# As of version 4.2.2 you'll need to include `--min_score_mid_barcodes 60`
+# to make it work like previous versions, as they changed the default setting.
 
 # Adjust flocell, kit and barcode as required. 
 
