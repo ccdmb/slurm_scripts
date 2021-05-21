@@ -6,7 +6,7 @@
     + [Running Guppy on Topaz (super accuracy mode, 2 GPUs per node)](#running-guppy-on-topaz--super-accuracy-mode--2-gpus-per-node-)
       - [without demultiplexing](#without-demultiplexing)
       - [with demultiplexing](#with-demultiplexing)
-      - [merging output after basecalling (barcoded)](#merging-output-after-basecalling--barcoded-)
+        * [merging output after basecalling (barcoded)](#merging-output-after-basecalling--barcoded-)
         * [merging output after basecalling (not barcoded)](#merging-output-after-basecalling--not-barcoded-)
 
 # CCDM Slurm Script Collection
