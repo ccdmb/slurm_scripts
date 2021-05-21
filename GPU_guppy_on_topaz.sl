@@ -16,16 +16,16 @@ module load singularity
 module load cuda
 
 # Image from https://hub.docker.com/r/jwdebler/guppy-gpu/tags
-# Downloaded via 'singularity pull docker://jwdebler/guppy-gpu:4.5.4'
+# Downloaded via 'singularity pull docker://jwdebler/guppy-gpu:5.0.7'
 # As of version 4.2.2 you'll need to include `--min_score_mid_barcodes 60`
 # to make it work like previous versions, as they changed the default setting.
 
 # Adjust flocell, kit and barcode as required. 
 
 srun -n 1 --export=all --gres=gpu:1 \
-singularity exec --nv /group/y95/jdebler/guppy-gpu_4.5.4.sif guppy_basecaller \
--i /scratch/y95/jdebler/input/fast5 \
--s /scratch/y95/jdebler/output/fastq \
+singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.7.sif guppy_basecaller \
+-i /scratch/y95/jdebler/folder_with_fast5_files \
+-s /scratch/y95/jdebler/output_folder \
 --flowcell FLO-MIN106 \
 --kit SQK-LSK109 \
 --barcode_kits EXP-NBD104 \
