@@ -5,7 +5,7 @@
       - [with demultiplexing (barcoded samples)](#with-demultiplexing--barcoded-samples-)
     + [Running Guppy on Topaz (super accuracy mode, 2 GPUs per node)](#running-guppy-on-topaz--super-accuracy-mode--2-gpus-per-node-)
       - [without demultiplexing](#without-demultiplexing)
-        * [with demultiplexing](#with-demultiplexing)
+      - [with demultiplexing](#with-demultiplexing)
       - [merging output after basecalling (barcoded)](#merging-output-after-basecalling--barcoded-)
         * [merging output after basecalling (not barcoded)](#merging-output-after-basecalling--not-barcoded-)
 
@@ -139,7 +139,7 @@ done
 wait
 ```
 
-##### with demultiplexing
+#### with demultiplexing
 
 ```
 #!/bin/bash -l
@@ -182,7 +182,7 @@ done
 wait
 ```
 
-#### merging output after basecalling (barcoded)
+##### merging output after basecalling (barcoded)
 
 Since we had to split the input fast5 files for parallel processing, we also end up with the output files in different directories.
 In order to merge the output files and rename them (if they were multiplexed), copy following code into a shell script and run it from inside the output directory you defined in your slurm script. 
