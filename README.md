@@ -9,8 +9,6 @@
       - [merging output after basecalling (barcoded)](#merging-output-after-basecalling--barcoded-)
       - [merging output after basecalling (not barcoded)](#merging-output-after-basecalling--not-barcoded-)
 
-<small><i><a href='http://ecotrust-canada.github.io/markdown-toc/'>Table of contents generated with markdown-toc</a></i></small>
-
 
 # CCDM Slurm Script Collection
 
