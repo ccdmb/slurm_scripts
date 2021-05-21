@@ -5,10 +5,9 @@
       - [with demultiplexing (barcoded samples)](#with-demultiplexing--barcoded-samples-)
     + [Running Guppy on Topaz (super accuracy mode, 2 GPUs per node)](#running-guppy-on-topaz--super-accuracy-mode--2-gpus-per-node-)
       - [without demultiplexing](#without-demultiplexing)
-      - [with demultiplexing](#with-demultiplexing)
+        * [with demultiplexing](#with-demultiplexing)
       - [merging output after basecalling (barcoded)](#merging-output-after-basecalling--barcoded-)
-      - [merging output after basecalling (not barcoded)](#merging-output-after-basecalling--not-barcoded-)
-
+        * [merging output after basecalling (not barcoded)](#merging-output-after-basecalling--not-barcoded-)
 
 # CCDM Slurm Script Collection
 
@@ -140,7 +139,7 @@ done
 wait
 ```
 
-#### with demultiplexing
+##### with demultiplexing
 
 ```
 #!/bin/bash -l
@@ -263,7 +262,7 @@ found unclassified in 1/pass/unclassified, merging into unclassified.fastq.gz
 
 `input_0` and `input_1` contain my fast5 files, `output_guppy_507` contains 2 folders, `0` and `1`, which each contain the output of the individual guppy runs. This script now goes into those directories, looks into the `pass` folder and extracts and merges the reads stored in the respective `barcodeX` folders.
 
-#### merging output after basecalling (not barcoded)
+##### merging output after basecalling (not barcoded)
 
 This is a bit easier since we don't have to deal with barcode names. Simply run the following command from within the output directory:
 `for file in */pass/*.fastq.gz; do echo $file; cat $file > output.fastq.gz; done`
