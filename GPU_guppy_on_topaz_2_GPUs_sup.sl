@@ -25,7 +25,7 @@ for tagID in $(seq 0 1); do
     singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.7.sif guppy_basecaller \
     -i /scratch/y95/jdebler/input_${tagID}/ \
     -s /scratch/y95/jdebler/output_guppy507/${tagID} \
-    -c dna_r9.4.1_450bps_sup.cfg
+    -c dna_r9.4.1_450bps_sup.cfg \
     --barcode_kits EXP-NBD104 \
     --trim_barcodes \
     --detect_mid_strand_barcodes \
