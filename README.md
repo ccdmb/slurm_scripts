@@ -1,12 +1,29 @@
+- [CCDM Slurm Script Collection](#ccdm-slurm-script-collection)
+  * [GPU accelerated basecalling with Guppy](#gpu-accelerated-basecalling-with-guppy)
+    + [Running Guppy on Topaz (high accuracy mode, 1 GPU per node)](#running-guppy-on-topaz--high-accuracy-mode--1-gpu-per-node-)
+      - [without demultiplexing (single sample for example)](#without-demultiplexing--single-sample-for-example-)
+      - [with demultiplexing (barcoded samples)](#with-demultiplexing--barcoded-samples-)
+    + [Running Guppy on Topaz (super accuracy mode, 2 GPUs per node)](#running-guppy-on-topaz--super-accuracy-mode--2-gpus-per-node-)
+      - [without demultiplexing](#without-demultiplexing)
+      - [with demultiplexing](#with-demultiplexing)
+      - [merging output after basecalling (barcoded)](#merging-output-after-basecalling--barcoded-)
+      - [merging output after basecalling (not barcoded)](#merging-output-after-basecalling--not-barcoded-)
+
+<small><i><a href='http://ecotrust-canada.github.io/markdown-toc/'>Table of contents generated with markdown-toc</a></i></small>
+
+
 # CCDM Slurm Script Collection
+
 A shared repository for working slum scripts
 
 ## GPU accelerated basecalling with Guppy 
+
 Since the latest release of Guppy (5.0.7) it has inbuilt bonito models, which increase accuracy of the basecalls, but takes about 3 times longer to call. If you want to use 'high accuracy' mode, one GPU per node is enough to call a full flowcell run in about 10 hours. Therefore you can leave all your fast5 files in a single directory. If you want to use the new 'super accuracy' mode though, you might run into walltime issues. Therefore we are utilizing both GPUs per node. In order to do that however, we need to split the input files and run separate instances of Guppy on each directory.
 
 ### Running Guppy on Topaz (high accuracy mode, 1 GPU per node)
 
 #### without demultiplexing (single sample for example)
+
 Copy and paste the following code into a textfile on topaz and edit the location of your input files and where you want the output files to go:
 
 ```
@@ -169,6 +186,7 @@ wait
 ```
 
 #### merging output after basecalling (barcoded)
+
 Since we had to split the input fast5 files for parallel processing, we also end up with the output files in different directories.
 In order to merge the output files and rename them (if they were multiplexed), copy following code into a shell script and run it from inside the output directory you defined in your slurm script. 
 
@@ -248,6 +266,7 @@ found unclassified in 1/pass/unclassified, merging into unclassified.fastq.gz
 `input_0` and `input_1` contain my fast5 files, `output_guppy_507` contains 2 folders, `0` and `1`, which each contain the output of the individual guppy runs. This script now goes into those directories, looks into the `pass` folder and extracts and merges the reads stored in the respective `barcodeX` folders.
 
 #### merging output after basecalling (not barcoded)
+
 This is a bit easier since we don't have to deal with barcode names. Simply run the following command from within the output directory:
 `for file in */pass/*.fastq.gz; do echo $file; cat $file > output.fastq.gz; done`
 Change `output.fastq.gz` to whatever samplename you want.
