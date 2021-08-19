@@ -12,7 +12,7 @@
 # This config uses the new bonito derived 'super_accurate' model and will therefore be 3 times slower than the 'hac' model.
 
 # Image from https://hub.docker.com/r/jwdebler/guppy-gpu/tags
-# Downloaded via 'singularity pull docker://jwdebler/guppy-gpu:5.0.7'
+# Downloaded via 'singularity pull docker://jwdebler/guppy-gpu:5.0.11'
 # As of version 4.2.2 you'll need to include `--min_score_mid_barcodes 60`
 # to make it work like previous versions, as they changed the default setting.
 
@@ -22,9 +22,9 @@ module load cuda
 
 for tagID in $(seq 0 1); do
         srun -u -N 1 -n 1 --mem=0 --gres=gpu:1 --exclusive \
-    singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.7.sif guppy_basecaller \
+    singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.11.sif guppy_basecaller \
     -i /scratch/y95/jdebler/input_${tagID}/ \
-    -s /scratch/y95/jdebler/output_guppy507/${tagID} \
+    -s /scratch/y95/jdebler/output_guppy5011/${tagID} \
     -c dna_r9.4.1_450bps_sup.cfg \
     --barcode_kits EXP-NBD104 \
     --trim_barcodes \
