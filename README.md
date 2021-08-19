@@ -40,7 +40,7 @@ module load singularity
 module load cuda
 
 # Image from https://hub.docker.com/r/jwdebler/guppy-gpu/tags
-# Downloaded via 'singularity pull docker://jwdebler/guppy-gpu:5.0.7' or use the one in my group folder
+# Downloaded via 'singularity pull docker://jwdebler/guppy-gpu:5.0.11' or use the one in my group folder
 # As of version 4.2.2 you'll need to include `--min_score_mid_barcodes 60`
 # to make it work like previous versions, as they changed the default setting.
 
@@ -48,7 +48,7 @@ module load cuda
 # FLO-MIN106 is the R9.4.1 series flowcell that we usually use
 
 srun -n 1 --export=all --gres=gpu:1 \
-singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.7.sif guppy_basecaller \
+singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.11.sif guppy_basecaller \
 -i /scratch/y95/jdebler/folder_with_fast5_files \
 -s /scratch/y95/jdebler/output_folder \
 --flowcell FLO-MIN106 \
@@ -85,7 +85,7 @@ module load cuda
 # EXP-NBD104 is barcodes 1-12, EXP-NBD114 is barcodes 13-24
 
 srun -n 1 --export=all --gres=gpu:1 \
-singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.7.sif guppy_basecaller \
+singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.11.sif guppy_basecaller \
 -i /scratch/y95/jdebler/folder_with_fast5_files \
 -s /scratch/y95/jdebler/output_folder \
 --flowcell FLO-MIN106 \
@@ -129,7 +129,7 @@ module load cuda
 
 for tagID in $(seq 0 1); do
     srun -u -N 1 -n 1 --mem=0 --gres=gpu:1 --exclusive \
-    singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.7.sif guppy_basecaller \
+    singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.11.sif guppy_basecaller \
     -i /scratch/y95/jdebler/input_${tagID}/ \
     -s /scratch/y95/jdebler/output_guppy507/${tagID} \
     -c dna_r9.4.1_450bps_sup.cfg \
@@ -168,7 +168,7 @@ module load cuda
 
 for tagID in $(seq 0 1); do
     srun -u -N 1 -n 1 --mem=0 --gres=gpu:1 --exclusive \
-    singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.7.sif guppy_basecaller \
+    singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.11.sif guppy_basecaller \
     -i /scratch/y95/jdebler/input_${tagID}/ \
     -s /scratch/y95/jdebler/output_guppy507/${tagID} \
     -c dna_r9.4.1_450bps_sup.cfg \
