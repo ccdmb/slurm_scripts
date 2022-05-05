@@ -22,15 +22,16 @@ module load cuda
 
 for tagID in $(seq 0 1); do
         srun -u -N 1 -n 1 --mem=0 --gres=gpu:1 --exclusive \
-    singularity exec --nv /group/y95/jdebler/guppy-gpu_5.0.11.sif guppy_basecaller \
+    singularity exec --nv /group/y95/jdebler/guppy-gpu_6.1.3.sif guppy_basecaller \
     -i /scratch/y95/jdebler/input_${tagID}/ \
-    -s /scratch/y95/jdebler/output_guppy5011/${tagID} \
+    -s /scratch/y95/jdebler/output_guppy613/${tagID} \
     -c dna_r9.4.1_450bps_sup.cfg \
     --barcode_kits EXP-NBD104 \
     --trim_barcodes \
     --detect_mid_strand_barcodes \
-    --min_score_mid_barcodes 60 \
+    --min_score_barcode_mid 60 \
     --compress_fastq \
+    --fast5_out \
     -x cuda:all &
 done
 wait
