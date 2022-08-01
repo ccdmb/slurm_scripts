@@ -12,7 +12,7 @@ TIME="$(date +'%Y%m%d-%H%M%S')"
 VERSION="v0.0.1"
 GROUP="${PAWSEY_PROJECT:-UNSET}"
 PARTITION="copy"
-VALID_SUBCOMMANDS=( copy copyto untar tar gunzip gzip sync )
+VALID_SUBCOMMANDS=( copy copyto untar tar gunzip gzip sync help version )
 SUBCOMMAND=
 
 RCLONE_SRC=
@@ -80,6 +80,17 @@ NB. Using --filter, --include, or --exclude will raise an error for tar or gzip 
 "
 }
 
+check_positional() {
+    FLAG="${1}"
+    VALUE="${2}"
+    if [ -z "${VALUE:-}" ]
+    then
+        echo_stderr "Positional argument ${FLAG} is missing."
+        exit 1
+    fi
+    true
+}
+
 check_no_default_param() {
     FLAG="${1}"
     PARAM="${2}"
@@ -110,11 +121,11 @@ isin() {
 
 isremote() {
     REMOTES=( $(rclone listremotes) )
-    return isin $1 ${REMOTES[@]}
+    return $(isin $1 ${REMOTES[@]})
 }
 
 islocal() {
-    return [ -f "$1" ] || [ -d "$1" ]
+    return $( [ -f "$1" ] || [ -d "$1" ])
 }
 
 if [ $# -eq 0 ]
@@ -129,7 +140,12 @@ fi
 ### Prepare software
 
 # Attempts to load the module, but it's ok if not
-if which module > /dev/null
+# Module is a bit weird, it doesn't seem to exist on PATH.
+# And it returns 1 with help.
+# Here we rely on 127 if the command isn't found.
+MODULE_RC=0
+module > /dev/null 2>&1 || MODULE_RC=$?
+if [ ${MODULE_RC} = 1 ]
 then
     module load "${RCLONE_MODULE}" | true
 fi
@@ -154,10 +170,11 @@ fi
 RCLONE_ARGS=( )
 
 # The subcommand should always be first
+check_positional "SUBCOMMAND" "${1:-}"
 SUBCOMMAND=$1
 shift
 
-if [ $(isin "${SUBCOMMAND}" ${VALID_SUBCOMMANDS[@]}) = "false" ]
+if ! isin "${SUBCOMMAND}" ${VALID_SUBCOMMANDS[@]}
 then
     echo_stderr "ERROR: Got unexpected subcommand '${SUBCOMMAND}'"
     echo_stderr "ERROR: The first argument must be one of ${VALID_SUBCOMMANDS[@]}"
@@ -165,9 +182,25 @@ then
     exit 1
 fi
 
+if [ "${SUBCOMMAND}" = "help" ]
+then
+    usage
+    help
+
+    echo "### RCLONE HELP"
+    rclone help
+    exit 0
+elif [ "${SUBCOMMAND}" = "version" ]
+then
+    echo ${VERSION}
+    exit 0
+fi
+
+
 # We're enforcing that the SRC and DEST must always be first
 # This just makes it easier to parse and is inline with the Rclone docs anyway
 
+check_positional "SOURCE" "${1:-}"
 RCLONE_SRC=$1
 
 if (! isremote "${RCLONE_SRC}") && (! islocal "${RCLONE_SRC}" )
@@ -178,7 +211,9 @@ then
 fi
 shift
 
+check_positional "DEST" "${1:-}"
 RCLONE_DEST=$1
+
 if [[ "${RCLONE_DEST}" == "-"* ]]
 then
     echo_stderr "WARNING: Your destination file \`${RCLONE_DEST}\` looks like it might be an argument."
@@ -230,18 +265,9 @@ do
             PARTITION="$2"
             shift 2 # past argument
             ;;
-        --batch-help)
-            usage
-            help
-            exit 0
-            ;;
         --batch-debug)
             DEBUG=true
             shift # past argument
-            ;;
-        --batch-version)
-            echo ${VERSION}
-            exit 0
             ;;
         --filter|--include|--exclude)
             RCLONE_HAS_FILTERS=true
@@ -260,9 +286,17 @@ do
             shift # past argument
             ;;
         --help)
-            echo "WARNING: ,For more detailed help, please call rclone directly."
-
-            rclone --help
+	    SC="${SUBCOMMAND}"
+	    if isin "${SC}" tar gzip
+	    then
+		echo "\`${SCRIPT} ${SUBCOMMAND}\` calls \`rclone rcat\`. The documentation is provided below." 
+	        SC=rcat
+	    elif isin "${SC}" untar gunzip
+	    then
+		echo "\`${SCRIPT} ${SUBCOMMAND}\` calls \`rclone cat\`. The documentation is provided below." 
+	        SC=cat
+	    fi
+            rclone "${SC}" --help
             exit 0
             ;;
         --version)
