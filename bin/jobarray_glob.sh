@@ -9,13 +9,26 @@ TIME="$(date +'%Y%m%d-%H%M%S')"
 
 # Set defaults
 VERSION="v0.0.1"
-GROUP="${PAWSEY_PROJECT:-UNSET}"
-PARTITION="work"
-NODES=1
+DRY_RUN=false
+PACK=false
+
+NTASKS_PER_NODE=
+NODES=
 NTASKS=
-NCPUPERTASK=
+CPUS_PER_TASK=
 
 NPARAMS=1
+
+SLURM_STDOUT_SET=false
+SLURM_STDOUT_DEFAULT="${TIME}-%A-%a.stdout"
+SLURM_STDERR_SET=false
+SLURM_STDERR_DEFAULT="${TIME}-%A-%a.stderr"
+SLURM_EXPORT_SET=false
+SLURM_EXPORT_DEFAULT=NONE
+SLURM_ACCOUNT_SET=false
+SLURM_ACCOUNT_DEFAULT="${PAWSEY_PROJECT:-UNSET}"
+SLURM_PARTITION_SET=false
+SLURM_PARTITION_DEFAULT="work"
 
 VALID_SLURM_FLAGS=( --contiguous -h --help -H --hold --ignore-pbs -O --overcommit -s --oversubscribe --parsable --spread-job -Q --quiet --reboot --requeue -Q --quiet --reboot --requeue --test-only --usage --use-min-nodes -v --verbose -W --wait -V --version )
 VALID_SLURM_FLAGS_OPTIONAL_VALUE=( --exclusive --get-user-env --nice -k --no-kill --propagate )
@@ -33,7 +46,7 @@ export -f echo_stderr
 
 usage() {
     echo -e "USAGE:
-${SCRIPT} 
+${SCRIPT}
 "
 }
 
@@ -47,17 +60,18 @@ Run \`${SCRIPT} --batch-help\` for extended usage information."
 help() {
     echo -e "
 This script wraps SLURM job-arrays up in a more convenient way to perform embarassing parallelism from a glob of files.
-All 
+All
 
 It requires SLURM installed in your environment.
 
 Parameters:
-  --account=GROUP -- Which account should the slurm job be submitted under. DEFAULT: ${GROUP}
-  --export={[ALL,]<environment_variables>|ALL|NONE} Default NONE as suggested by pawsey.
-  --partition -- Which queue/partition should the slurm job be submitted to. DEFAULT: ${PARTITION}
-  --output -- The output filename of the job stdout. default <datetime>-<jobid>-<array_index>.stdout
-  --error -- The output filename of the job stderr. default <datetime>-<jobid>-<array_index>.stderr
+  --account=GROUP -- Which account should the slurm job be submitted under. DEFAULT: ${SLURM_ACCOUNT_DEFAULT}
+  --export={[ALL,]<environment_variables>|ALL|NONE} Default ${SLURM_EXPORT_DEFAULT} as suggested by pawsey.
+  --partition -- Which queue/partition should the slurm job be submitted to. DEFAULT: ${SLURM_PARTITION_DEFAULT}
+  --output -- The output filename of the job stdout. default "${TIME}-%A-%a.stdout"
+  --error -- The output filename of the job stderr. default "${TIME}-%A-%a.stderr"
   --batch-nparams -- How many parameters to take for each separate job. Default: 1
+  --batch-dry-run -- Print the command that will be run and exit.
   --batch-help -- Show this help and exit.
   --batch-debug -- Sets verbose logging so you can see what's being done.
 
@@ -97,7 +111,7 @@ This is designed to work best with the curly brace expansion. E.g.
 ./jobarray_glob.sh --batch-nparams 2 -- my_script.sh one-R1.fastq.gz two-R1.fastq.gz one-R2.fastq.gz two-R2.fastq.gz
 \`\`\`
 
-To customise the input provided you can use a subset of the replacement strings defined for gnu parallel. 
+To customise the input provided you can use a subset of the replacement strings defined for gnu parallel.
 https://www.gnu.org/software/parallel/parallel_tutorial.html#replacement-strings
 
 Accessing multiple filenames.
@@ -143,7 +157,7 @@ Accessing multiple filenames.
 # Using multiple parameters with replacements
 ./jobarray_glob.sh --batch-nparams 2 -- "my_script.sh --out {1/..} --in1 {1} --in2 {2}" mydir/*.fastq.gz
 # Would run
-# my_script.sh --out one --in1 mydir/one.fastq.gz --in2 mydir/one.fastq.gz 
+# my_script.sh --out one --in1 mydir/one.fastq.gz --in2 mydir/one.fastq.gz
 # my_script.sh --out two --in1 mydir/two.fastq.gz --in2 mydir/two.fastq.gz
 \`\`\`
 
@@ -212,7 +226,7 @@ then
 fi
 
 
-SLURM_ARGS=( slurm )
+SLURM_ARGS=( --parsable )
 
 # Here we catch our special parameters and collect the rclone ones
 while [[ $# -gt 0 ]]
@@ -220,76 +234,125 @@ do
     key="$1"
 
     case $key in
+        --batch-pack)
+            PACK=true
+            shift
+            ;;
+        --batch-dry-run)
+            DRY_RUN=true
+            shift
+            ;;
         --batch-debug)
             DEBUG=true
             shift # past argument
             ;;
-	--batch-nparams)
+        --batch-nparams)
             check_param "--batch-nparam" "${2:-}"
-	    NPARAMS="$2"
-	    shift 2
-	    ;;
+            NPARAMS="$2"
+            shift 2
+            ;;
         --batch-help)
-	    usage
-	    help
+            usage
+            help
             exit 0
             ;;
         --batch-version)
-	    echo "${VERSION}"
+            echo "${VERSION}"
             exit 0
             ;;
         -a|--array|-a=*|--array=*)
-	    echo_stderr "ERROR: We handle the --array parameter ourselves, you can't set it"
-	    echo_stderr "ERROR: Remove the \`--array\` parameter."
-	    exit 1
-	    ;;
-	--)
-            shift
-	    break
-	    ;;
-        *)  
-	    if isin "$1" "${VALID_SLURM_FLAGS[@]}"
-            then
-                SLURM_ARGS=( "${SLURM_ARGS[@]}" "$1")
-		shift
-		continue
-	    fi
-
-	    THIS_ARG=( $(split_at_equals "$1") )
-
-	    if [ ${#THIS_ARG[@]} = 2 ]
-	    then
-                NEXT_ARG="${THIS_ARG[1]}"
-		THIS_ARG="${THIS_ARG[0]}"
-		SKIP=1
-	    elif [[ ! "${2:-}" == "-"* ]]
-            then
-		NEXT_ARG="${2:-}"
-		SKIP=2
-            else
-		NEXT_ARG=""
-                SKIP=1
-	    fi
-
-	    if ! isin "${THIS_ARG}" ${VALID_SLURM_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SLURM_ARGS[@]} 
-            then
-		echo "END of ${THIS_ARG}"
-		break
-	    fi
-
-            SLURM_ARGS=( "${SLURM_ARGS[@]}" "${THIS_ARG}" )
-
-	    if ( isin "${THIS_ARG}" "${VALID_SLURM_ARGS[@]}" ) && [ -z "${NEXT_ARG:-}" ]
-	    then
-		echo_stderr "ERROR: ${THIS_ARG} expects a value."
-		exit 1
-	    elif [ ! -z "${NEXT_ARG:-}" ]
-            then
-	        SLURM_ARGS=( "${SLURM_ARGS[@]}" "${NEXT_ARG:-}" )
-            fi
-
-            shift "${SKIP}"
+            echo_stderr "ERROR: We handle the --array parameter ourselves, you cant set it"
+            echo_stderr "ERROR: Remove the \`--array\` parameter."
+            exit 1
             ;;
+        --ntasks-per-core*|--ntasks-per-gpu*|--ntasks-per-socket*)
+            echo_stderr "ERROR: We cannot handle the --ntasks-per flags currently"
+            echo_stderr "ERROR: Please set the number of tasks separately or write your own script."
+            exit 1
+        ;;
+        --parsable)
+            # We add this already
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+        if isin "$1" "${VALID_SLURM_FLAGS[@]}"
+        then
+            SLURM_ARGS=( "${SLURM_ARGS[@]}" "$1")
+            shift
+            continue
+        fi
+
+        THIS_ARG=( $(split_at_equals "$1") )
+
+        if [ ${#THIS_ARG[@]} = 2 ]
+        then
+            NEXT_ARG="${THIS_ARG[1]}"
+            THIS_ARG="${THIS_ARG[0]}"
+            SKIP=1
+        elif [[ ! "${2:-}" == "-"* ]]
+        then
+            NEXT_ARG="${2:-}"
+            SKIP=2
+        else
+            NEXT_ARG=""
+            SKIP=1
+        fi
+
+        case "${THIS_ARG}" in
+            --export)
+                SLURM_EXPORT_SET=true
+                ;;
+            -A|--account)
+                SLURM_ACCOUNT_SET=true
+                ;;
+            -p|--partition)
+                SLURM_PARTITION_SET=true
+                ;;
+            -o|--output)
+                SLURM_STDOUT_SET=true
+                ;;
+            -e|--error)
+                SLURM_STDERR_SET=true
+                ;;
+            -n|--ntasks)
+                NTASKS="${NEXT_ARG}"
+                ;;
+            -N|--nodes)
+                NODES="${NEXT_ARG}"
+                ;;
+            --ntasks-per-node)
+                NTASKS_PER_NODE="${NEXT_ARG}"
+                ;;
+            -c|--cpus-per-task)
+                CPUS_PER_TASK="${NEXT_ARG}"
+                ;;
+        esac
+
+        if ! isin "${THIS_ARG}" ${VALID_SLURM_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SLURM_ARGS[@]}
+        then
+            echo_stderr "WARNING: We encountered an unexpected argument (${THIS_ARG}) before --."
+            echo_stderr "WARNING: We'll continue as if you had used -- (it's best to explicitly provide it)."
+            echo_stderr "WARNING: No further parameters will be passed to SLURM."
+            break
+        fi
+
+        SLURM_ARGS=( "${SLURM_ARGS[@]}" "${THIS_ARG}" )
+
+        if ( isin "${THIS_ARG}" "${VALID_SLURM_ARGS[@]}" ) && [ -z "${NEXT_ARG:-}" ]
+        then
+            echo_stderr "ERROR: ${THIS_ARG} expects a value."
+            exit 1
+        elif [ ! -z "${NEXT_ARG:-}" ]
+        then
+            SLURM_ARGS=( "${SLURM_ARGS[@]}" "${NEXT_ARG:-}" )
+        fi
+
+        shift "${SKIP}"
+        ;;
     esac
 done
 
@@ -299,11 +362,56 @@ then
 fi
 
 
+# Set a couple of default slurm parameters if they werent given
+
+if [ "${SLURM_STDOUT_SET}" = false ] && [ "${SLURM_STDERR_SET}" = false ]
+then
+    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--output" "${SLURM_STDOUT_DEFAULT}" )
+    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--error" "${SLURM_STDERR_DEFAULT}" )
+fi
+
+if [ "${SLURM_EXPORT_SET}" = false ]
+then
+    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--export" "${SLURM_EXPORT_DEFAULT}" )
+fi
+
+if [ "${SLURM_ACCOUNT_SET}" = false ]
+then
+    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--account" "${SLURM_ACCOUNT_DEFAULT}" )
+fi
+
+if [ "${SLURM_PARTITION_SET}" = false ]
+then
+    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--partition" "${SLURM_PARTITION_DEFAULT}" )
+fi
+
+if [ "${PACK}" = true ] && [ -z "${NTASKS:-}" ]
+then
+    if [ ! -z "${NTASKS_PER_NODE:-}" ]
+    then
+        if [ ! -z "${NODES:-}" ]
+        then
+            NTASKS=$(( "${NTASKS_PER_NODE:-}" * "${NODES:-}" ))
+        else
+            echo_stderr "If you provide --ntasks-per-node you must also provide --nodes"
+            exit 1
+        fi
+    fi
+fi
+
+
+if [ "${#@}" = 0 ]
+then
+    echo_stderr "ERROR: You have not provided a script to run."
+    usage_err
+    exit 1
+fi
+
+
 SCRIPT=$1
 shift
 POSITIONAL=( "$@" )
 
-echo ${#POSITIONAL[@]}
 if [ "${#POSITIONAL[@]}" = 0 ]
 then
     echo_stderr "ERROR: You have not provided any files to operate on."
@@ -316,9 +424,8 @@ then
     exit 1
 fi
 
-
+# Here we figure out which parameters to use for each task
 NJOBS=$(( "${#POSITIONAL[@]}" / "${NPARAMS:-}" ))
-echo "${NJOBS}"
 
 get_index() {
     PARAM="${1}"
@@ -331,20 +438,19 @@ get_index() {
 ARRAY=( )
 for i in $(seq 0 $(( "${NJOBS}" - 1)) )
 do
-    echo "I $i"
     THIS=""
     SPACE=""
     for p in $(seq 0 "$(( ${NPARAMS} - 1))")
     do
         INDEX=$(get_index "${p}" "${NJOBS}" "${i}")
-	echo "INDEX ${INDEX}"
-	VAL="${POSITIONAL["${INDEX}"]}"
-	THIS="${THIS}${SPACE}${VAL}"
-	SPACE=" "
+        VAL="${POSITIONAL["${INDEX}"]}"
+        THIS="${THIS}${SPACE}${VAL}"
+        SPACE=" "
     done
     ARRAY=( "${ARRAY[@]}" "${THIS}" )
 done
 
+# Now we substitute the filenames for the script.
 read -r -d '' PY_SCRIPT <<EOF || true
 import re
 from os.path import basename, dirname, splitext
@@ -363,30 +469,97 @@ def outer(nparams, line):
         else:
             index = int(index) - 1
 
-        val = ARGS[index]
+        val = line[index]
         cmd = match.group("cmd")
         if cmd == "":
             return val
 
         if "//" in cmd:
-            return dirname(cmd)
+            return dirname(val)
         elif "/" in cmd:
             val = basename(val)
 
-        for i in val.count("."):
+        for i in range(cmd.count(".")):
             val, _ = splitext(val)
         return val
     return replacement
 
 for line in sys.stdin:
     line = line.strip().split()
-    nparams = sys.argv[0]
-    command = sys.argv[1]
-    assert len(line_args) == nparams, line
-    replaced_line = REGEX.sub(replacement, command)
+    if len(line) == 0:
+        continue
+    nparams = int(sys.argv[1])
+    command = sys.argv[2]
+    assert len(line) == nparams, line
+    fn = outer(nparams, line)
+    cmd = REGEX.sub(fn, command)
+    if cmd == command:
+        cmd = cmd + " '" + "' ".join(line) + "'"
 
-    replaced_line = re.sub(r"(?P<paren>[{}])(?P=paren)", r"\\g<paren>", replaced_line)
-    print(replaced_line)
+    cmd = re.sub(r"(?P<paren>[{}])(?P=paren)", r"\\g<paren>", cmd)
+
+    print(cmd)
 EOF
 
-python3 <(echo "${PY_SCRIPT}") "${NPARAMS}" "${SCRIPT}" < <(printf "%s\n" "${ARRAY[@]}")
+CMDS=$(python3 <(echo "${PY_SCRIPT}") "${NPARAMS}" "${SCRIPT}" < <(printf "%s\n" "${ARRAY[@]}"))
+
+SRUN_SCRIPT="${TMPDIR:-.}/.tmp_${TIME}_$$"
+cat <<EOF > "${SRUN_SCRIPT}" || true
+#!/usr/bin/env bash
+
+readarray -t CMDS <<EOF_CMDS || true
+${CMDS}
+EOF_CMDS
+export CMDS
+
+export INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
+
+if [ \${INDEX} -gt $(( ${NJOBS} - 1 )) ]
+then
+    exit 0
+fi
+
+eval "\${CMDS[\${INDEX}]}"
+EOF
+
+trap "rm -f -- ${SRUN_SCRIPT}" ERR
+chmod a+x "${SRUN_SCRIPT}"
+
+read -r -d '' BATCH_SCRIPT <<EOF || true
+#!/bin/bash --login
+
+set -euo pipefail
+
+trap "rm -f -- ${SRUN_SCRIPT}" EXIT
+
+srun --nodes "\${SLURM_JOB_NUM_NODES:-1}" \
+  --ntasks "\${SLURM_NTASKS:-1}" \
+  --cpus-per-task "\${SLURM_CPUS_PER_TASK:-1}" \
+  --export=all \
+  ${SRUN_SCRIPT}
+
+JOBID="\${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
+seff "\${JOBID}" || true
+EOF
+
+if [ "${PACK}" = true ]
+then
+    if [ -z "${NTASKS:-}" ]
+    then
+        echo_stderr "we shouldnt be able to reach this point."
+        exit 1
+    fi
+    ARRAY_STR="0-$(( ${NJOBS} - 1 )):${NTASKS}"
+else
+    ARRAY_STR="0-$(( ${NJOBS} - 1 ))"
+fi
+
+if [ "${DRY_RUN}" = "true" ]
+then
+    echo "${BATCH_SCRIPT:-}"
+    cat "${SRUN_SCRIPT}"
+    echo "BATCH:" sbatch --array="${ARRAY_STR}" "${SLURM_ARGS[@]}"
+else
+    SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch --array="${ARRAY_STR}" "${SLURM_ARGS[@]}")
+    echo ${SLURM_ID}
+fi
