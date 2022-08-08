@@ -353,31 +353,30 @@ import sys
 REGEX = re.compile(r"(?<!{){(?P<index>\\d*)(?P<cmd>[^{}]*)}(?!})")
 
 def outer(nparams, line):
-  def replacement(match):
-      if (match.group("index") == "") and (nparams > 1):
-	  raise ValueError("If using replacement strings with more than 1 parameter, the patterns must have an index.")
+    def replacement(match):
+        if (match.group("index") == "") and (nparams > 1):
+            raise ValueError("If using replacement strings with more than 1 parameter, the patterns must have an index.")
 
-      index = match.group("index")
-      if index == "":
-	  index = 0
-  else:
-	  index = int(index) - 1
+        index = match.group("index")
+        if index == "":
+            index = 0
+        else:
+            index = int(index) - 1
 
-      val = ARGS[index]
+        val = ARGS[index]
+        cmd = match.group("cmd")
+        if cmd == "":
+            return val
 
-      cmd = match.group("cmd")
-      if cmd == "":
-	  return val
+        if "//" in cmd:
+            return dirname(cmd)
+        elif "/" in cmd:
+            val = basename(val)
 
-      if "//" in cmd:
-	return dirname(cmd)
-elif "/" in cmd:
-	  val = basename(val)
-
-      for i in val.count("."):
-	  val, _ = splitext(val)
-
-      return val
+        for i in val.count("."):
+            val, _ = splitext(val)
+        return val
+    return replacement
 
 for line in sys.stdin:
     line = line.strip().split()
