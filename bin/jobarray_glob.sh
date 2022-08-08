@@ -11,6 +11,7 @@ TIME="$(date +'%Y%m%d-%H%M%S')"
 VERSION="v0.0.1"
 DRY_RUN=false
 PACK=false
+MODULES=
 
 NTASKS_PER_NODE=
 NODES=
@@ -70,6 +71,7 @@ Parameters:
   --partition -- Which queue/partition should the slurm job be submitted to. DEFAULT: ${SLURM_PARTITION_DEFAULT}
   --output -- The output filename of the job stdout. default "${TIME}-%A-%a.stdout"
   --error -- The output filename of the job stderr. default "${TIME}-%A-%a.stderr"
+  --batch-pack -- Pack the job
   --batch-nparams -- How many parameters to take for each separate job. Default: 1
   --batch-dry-run -- Print the command that will be run and exit.
   --batch-help -- Show this help and exit.
@@ -78,7 +80,13 @@ Parameters:
 All other parameters, flags and arguments before '--' are passed to sbatch as is.
 See: https://slurm.schedmd.com/sbatch.html
 
+Note: you can't provide the --array flag, as this is set internally and it will raise an error.
+
 After '--':
+
+
+
+
 
 The first argument is the command that should be run.
 If there is space in the command, it must be enclosed in quotes to be interpreted as a single argument.
