@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT="$(readlink -f $0)"
-DIRNAME="$(dir ${SCRIPT})"
+DIRNAME="$(dirname ${SCRIPT})"
 SCRIPT="$(basename ${SCRIPT})"
 TIME="$(date +'%Y%m%d-%H%M%S')"
 
@@ -11,7 +11,8 @@ TIME="$(date +'%Y%m%d-%H%M%S')"
 VERSION="v0.0.1"
 DRY_RUN=false
 PACK=false
-MODULES=
+MODULES=( )
+GROUP=
 
 NTASKS_PER_NODE=
 NODES=
@@ -38,12 +39,7 @@ VALID_SLURM_ARGS=( -a --array -A --account --bb --bbf -b --begin --comment --cpu
 # This sets -x
 DEBUG=false
 
-
-echo_stderr() {
-    echo $@ 1>&2
-}
-
-export -f echo_stderr
+source "${DIRNAME}/../lib/cli.sh"
 
 usage() {
     echo -e "USAGE:
@@ -175,65 +171,6 @@ Note that unlike GNU parallel and srun, we don't support running functions.
 }
 
 
-isin() {
-    PARAM=$1
-    shift
-    for f in $@
-    do
-        if [[ "${PARAM}" == "${f}" ]]; then return 0; fi
-    done
-
-    return 1
-}
-
-
-check_positional() {
-    FLAG="${1}"
-    VALUE="${2}"
-    if [ -z "${VALUE:-}" ]
-    then
-        echo_stderr "Positional argument ${FLAG} is missing."
-        exit 1
-    fi
-    true
-}
-
-has_equals() {
-    return $([[ "${1}" = *"="* ]])
-}
-
-split_at_equals() {
-    IFS="=" FLAG=( ${1} )
-    ONE="${FLAG[0]}"
-    TWO=$(printf "=%s" "${FLAG[@]:1}")
-    IFS="=" echo "${ONE}" "${TWO:1}"
-}
-
-check_no_default_param() {
-    FLAG="${1}"
-    PARAM="${2}"
-    VALUE="${3}"
-    [ ! -z "${PARAM:-}" ] && (echo_stderr "Argument ${FLAG} supplied multiple times"; exit 1)
-    [ -z "${VALUE:-}" ] && (echo_stderr "Argument ${FLAG} requires a value"; exit 1)
-    true
-}
-
-check_param() {
-    FLAG="${1}"
-    VALUE="${2}"
-    [ -z "${VALUE:-}" ] && (echo_stderr "Argument ${FLAG} requires a value"; exit 1)
-    true
-}
-
-
-# Check if we've got sbatch
-if ! which sbatch > /dev/null
-then
-    echo_stderr "This script requires sbatch to be available on your path."
-    exit 1
-fi
-
-
 SLURM_ARGS=( --parsable )
 
 # Here we catch our special parameters and collect the rclone ones
@@ -242,6 +179,16 @@ do
     key="$1"
 
     case $key in
+        --batch-module)
+            check_param "--batch-module" "${2:-}"
+            MODULES=( "${MODULES[@]}" "${2}" )
+            shift 2
+            ;;
+        --batch-group)
+            check_param "--batch-group" "${2:-}"
+            GROUP="$2"
+            shift 2
+            ;;
         --batch-pack)
             PACK=true
             shift
@@ -369,6 +316,16 @@ then
     set -x
 fi
 
+if [ "${DRY_RUN}" = "false" ]
+then
+    # Check if we've got sbatch
+    if ! which sbatch > /dev/null
+    then
+        echo_stderr "This script requires sbatch to be available on your path."
+        exit 1
+    fi
+fi
+
 
 # Set a couple of default slurm parameters if they werent given
 
@@ -432,97 +389,28 @@ then
     exit 1
 fi
 
-# Here we figure out which parameters to use for each task
-NJOBS=$(( "${#POSITIONAL[@]}" / "${NPARAMS:-}" ))
+if [ -z "${GROUP:-}" ]
+then
+    GROUP_ARG=""
+else
+    GROUP_ARG=" --group '${GROUP}' "
+fi
 
-get_index() {
-    PARAM="${1}"
-    NJOBS="${2}"
-    INDEX="${3}"
-
-    echo $(( "${INDEX}" + ( "${PARAM}" * "${NJOBS}" ) ))
-}
-
-ARRAY=( )
-for i in $(seq 0 $(( "${NJOBS}" - 1)) )
-do
-    THIS=""
-    SPACE=""
-    for p in $(seq 0 "$(( ${NPARAMS} - 1))")
-    do
-        INDEX=$(get_index "${p}" "${NJOBS}" "${i}")
-        VAL="${POSITIONAL["${INDEX}"]}"
-        THIS="${THIS}${SPACE}${VAL}"
-        SPACE=" "
-    done
-    ARRAY=( "${ARRAY[@]}" "${THIS}" )
-done
-
-# Now we substitute the filenames for the script.
-read -r -d '' PY_SCRIPT <<EOF || true
-import re
-from os.path import basename, dirname, splitext
-import sys
-
-REGEX = re.compile(r"(?<!{){(?P<index>\\d*)(?P<cmd>[^{}]*)}(?!})")
-
-def outer(nparams, line):
-    def replacement(match):
-        if (match.group("index") == "") and (nparams > 1):
-            raise ValueError("If using replacement strings with more than 1 parameter, the patterns must have an index.")
-
-        index = match.group("index")
-        if index == "":
-            index = 0
-        else:
-            index = int(index) - 1
-
-        val = line[index]
-        cmd = match.group("cmd")
-        if cmd == "":
-            return val
-
-        if "//" in cmd:
-            return dirname(val)
-        elif "/" in cmd:
-            val = basename(val)
-
-        for i in range(cmd.count(".")):
-            val, _ = splitext(val)
-        return val
-    return replacement
-
-for line in sys.stdin:
-    line = line.strip().split()
-    if len(line) == 0:
-        continue
-    nparams = int(sys.argv[1])
-    command = sys.argv[2]
-    assert len(line) == nparams, line
-    fn = outer(nparams, line)
-    cmd = REGEX.sub(fn, command)
-    if cmd == command:
-        cmd = cmd + " '" + "' ".join(line) + "'"
-
-    cmd = re.sub(r"(?P<paren>[{}])(?P=paren)", r"\\g<paren>", cmd)
-
-    print(cmd)
-EOF
-
-CMDS=$(python3 <(echo "${PY_SCRIPT}") "${NPARAMS}" "${SCRIPT}" < <(printf "%s\n" "${ARRAY[@]}"))
+CMDS=$( "${DIRNAME}"/expansion.py ${GROUP_ARG} --nparams "${NPARAMS}" "${SCRIPT}" "${POSITIONAL[@]}" )
+NJOBS=$(echo "${CMDS}" | wc -l)
 
 SRUN_SCRIPT="${TMPDIR:-.}/.tmp_${TIME}_$$"
 cat <<EOF > "${SRUN_SCRIPT}" || true
 #!/usr/bin/env bash
 
 readarray -t CMDS <<EOF_CMDS || true
-${CMDS}
+${CMDS[@]}
 EOF_CMDS
 export CMDS
 
 export INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
 
-if [ \${INDEX} -gt $(( ${NJOBS} - 1 )) ]
+if [ "\${INDEX}" -gt $(( ${NJOBS} - 1 )) ]
 then
     exit 0
 fi
@@ -537,6 +425,8 @@ read -r -d '' BATCH_SCRIPT <<EOF || true
 #!/bin/bash --login
 
 set -euo pipefail
+
+module load ${MODULES[@]}
 
 trap "rm -f -- ${SRUN_SCRIPT}" EXIT
 
