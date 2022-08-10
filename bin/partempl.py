@@ -12,8 +12,24 @@ __version__ = "0.0.1"
 
 
 REGEX = re.compile(
-    r"(?<!{){(?P<index>\d+)?(?P<arr>@)?(?P<cmd>[^{}]*)}(?!})"
+    r"(?<!{){(?P<index>-?\d+)?(?P<arr>@)?(?P<cmd>[^{}]*)}(?!})"
 )
+
+PATTERN_REGEX = re.compile(
+    r"(?P<sep>[/%&~])(?P<pattern>.*?)(?P=sep)"
+)
+
+PATTERN2_REGEX = re.compile(
+    r"(?P<sep>[/%&~])(?P<pattern>.*?)(?P=sep)(?P<repl>.*?)(?P=sep)"
+)
+
+SLICE_REGEX = re.compile(
+    r"^\s*(?P<start>-?\d+)?\s*:\s*(?P<end>-?\d+)?"
+)
+
+POS_REGEX = re.compile(r"^\s*(?P<pos>-?\d+)")
+
+ESCAPE_REGEX = re.compile(r"([^a-zA-Z0-9,._+:@%/\-])")
 
 
 class CMDException(Exception):
@@ -117,81 +133,145 @@ def flatten_lists(li):
     return flat
 
 
+def index_arr(index, or_fn=None):
+
+    def inner(s):
+        try:
+            return s[index]
+        except IndexError:
+            if or_fn is not None:
+                s = or_fn([])
+                assert len(s) == 1
+                return s
+            else:
+                raise ValueError(
+                    f"Could not index array {s} "
+                    f"with index {index}."
+                )
+
+    return inner
+
+
+def slice_arr(slice_, or_fn=None):
+
+    def inner(s):
+        out = s[slice_]
+        if len(out) > 0:
+            return out
+
+        if or_fn is not None:
+            out = or_fn(out)
+            return out
+        else:
+            raise ValueError(
+                f"Taking slice of array {s} "
+                f"with {slice_} yielded empty array."
+            )
+
+    return inner
+
+
 def parse_slice(cmd):
-    splice_match = re.search(
-        r"^\s*(?P<start>\d+)?\s*:\s*(?P<end>\d+)",
-        cmd
-    )
-    pos_match = re.search(
-        r"^\s*(?P<pos>\d+)",
-        cmd
-    )
+    flag = cmd[0]
+    cmd = cmd[1:].strip()
 
-    if splice_match is not None:
-        start = splice_match.group("start")
-        end = splice_match.group("end")
+    slice_match = SLICE_REGEX.search(cmd)
+    pos_match = POS_REGEX.search(cmd)
 
-        cmd = cmd[splice_match.end():]
+    if slice_match is not None:
+        start = slice_match.group("start")
+        end = slice_match.group("end")
+
+        cmd = cmd[slice_match.end():].strip()
 
         if start is not None:
             start = int(start)
-            assert start >= 0
-            start -= 1
 
         if end is not None:
             end = int(end)
-            assert end > 0
-            if start is not None:
-                assert end > start
+            if (start is not None) and (end <= start):
+                raise CMDException(
+                    flag,
+                    ("Slice start must always be less "
+                     "than the slice end. Got start: "
+                     f"{start}, end: {end}")
+                )
 
         indexer = slice(start, end)
         is_str = False
 
     elif pos_match is not None:
         pos = pos_match.group("pos")
-        cmd = cmd[pos_match.end():]
+        cmd = cmd[pos_match.end():].strip()
 
         assert pos is not None
         indexer = int(pos)
-        indexer -= 1
         is_str = True
 
     else:
         raise CMDException(
-            ":",
+            flag,
             f"Indexer match couldn't find a slice or pos at left of {cmd}."
         )
 
-    return (lambda x: x[indexer]), cmd, is_str
+    if cmd.lower().startswith("o"):
+        or_fn, cmd, _ = parse_array_or(cmd)
+    else:
+        or_fn = None
+
+    if isinstance(indexer, int):
+        fn = index_arr(indexer, or_fn=or_fn)
+    else:
+        assert isinstance(indexer, slice)
+        fn = slice_arr(indexer, or_fn=or_fn)
+
+    return fn, cmd, is_str
 
 
 def parse_filter(cmd):
-    filter_match = re.search(
-        r"(?P<sep>[/%&~])(?P<pattern>.*)(?P=sep)",
-        cmd
-    )
+    flag = cmd[0]
+    cmd = cmd[1:].strip()
+
+    if cmd.startswith("^"):
+        cmd = cmd[1:].strip()
+        inverse = True
+        flag = f"{flag}^"
+    else:
+        inverse = False
+
+    filter_match = PATTERN_REGEX.search(cmd)
 
     if filter_match is None:
         raise CMDException(
-            "f",
+            flag,
             f"Couldn't find filter pattern boundaries (/%&~) at left of {cmd}."
         )
 
     pattern = filter_match.group("pattern")
     if pattern is None:
-        raise CMDException("f", "Pattern didn't match the string.")
+        raise CMDException(flag, "Pattern didn't match the string.")
 
-    PATTERN_REGEX = re.compile("(?P<pattern>" + pattern + ")")
-    cmd = cmd[filter_match.end():]
+    SUBPATTERN_REGEX = re.compile("(?P<pattern>" + pattern + ")")
+    cmd = cmd[filter_match.end():].strip()
+
+    if cmd.lower().startswith("o"):
+        or_fn, cmd, _ = parse_array_or(cmd)
+    else:
+        or_fn = None
 
     def inner(s):
         out = []
         for si in s:
-            match_ = PATTERN_REGEX.search(si)
-            if match_ is None:
+            match_ = SUBPATTERN_REGEX.search(si)
+            if inverse and (match_ is not None):
+                continue
+            elif (not inverse) and (match_ is None):
                 continue
 
             out.append(si)
+
+        if or_fn is not None:
+            out = or_fn(out)
 
         if len(out) == 0:
             raise CMDException(
@@ -207,20 +287,21 @@ def parse_filter(cmd):
 
 
 def parse_join(cmd):
-    join_match = re.search(
-        r"(?P<sep>[/%&~])(?P<pattern>.*)(?P=sep)",
-        cmd
-    )
+    flag = cmd[0]
+    cmd = cmd[1:].strip()
+
+    join_match = PATTERN_REGEX.search(cmd)
+
     if join_match is None:
         raise CMDException(
-            "j",
+            flag,
             f"Couldn't find join string boundaries (/%&~) at left of {cmd}."
         )
 
     pattern = join_match.group("pattern")
 
     if pattern is None:
-        raise CMDException("j", "Pattern didn't match the string.")
+        raise CMDException(flag, "Pattern didn't match the string.")
 
     cmd = cmd[join_match.end():]
 
@@ -230,22 +311,64 @@ def parse_join(cmd):
     return inner, cmd, True
 
 
+def parse_split(cmd):
+    flag = cmd[0]
+    cmd = cmd[1:].strip()
+
+    split_match = PATTERN_REGEX.search(cmd)
+
+    if split_match is None:
+        raise CMDException(
+            flag,
+            f"Couldn't find split string boundaries (/%&~) at left of {cmd}."
+        )
+
+    pattern = split_match.group("pattern")
+
+    if pattern is None:
+        raise CMDException("o", "Pattern didn't match the string.")
+
+    cmd = cmd[split_match.end():]
+    SUBPATTERN_REGEX = re.compile(pattern)
+
+    # Greedy split
+    if flag == flag.upper():
+        maxsplit = 0
+    else:
+        maxsplit = 1
+
+    def inner(s):
+        return SUBPATTERN_REGEX.split(s, maxsplit=maxsplit)
+
+    return inner, cmd, False
+
+
 def parse_strip(cmd):
     flag = cmd[0]
+    cmd = cmd[1:].strip()
 
-    if flag == "l":
+    if flag.lower() == "l":
         start = "^"
-        end = ""
-    else:
-        assert flag == "r"
-        end = "$"
-        start = ""
+        if flag == "l":
+            end = "(?P<keeper>.*?)$"
+        else:
+            # GREEDY
+            end = "(?P<keeper>.*)$"
 
-    cmd = cmd[1:]
-    strip_match = re.search(
-        r"^\s*(?P<sep>[/%&~])(?P<pattern>.*)(?P=sep)",
-        cmd
-    )
+    elif flag.lower() == "r":
+        if flag == "l":
+            start = "^(?P<keeper>.*?)"
+        else:
+            # GREEDY
+            start = "^(?P<keeper>.*)"
+        end = "$"
+    else:
+        raise CMDException(
+            flag,
+            f"Got an uknown flag {flag}. This shouldn't happen."
+        )
+
+    strip_match = PATTERN_REGEX.search(cmd)
 
     if strip_match is None:
         raise CMDException(
@@ -257,39 +380,36 @@ def parse_strip(cmd):
     if pattern is None:
         raise CMDException(flag, "Pattern didn't match the string.")
 
-    PATTERN_REGEX = re.compile(
+    SUBPATTERN_REGEX = re.compile(
         start +
         "(?P<pattern>" +
         pattern +
         ")" +
         end
     )
+
     cmd = cmd[strip_match.end():]
 
     def inner(s):
-        match_ = PATTERN_REGEX.search(s)
+        match_ = SUBPATTERN_REGEX.search(s)
 
         if match_ is None:
             return s
 
-        start, end = match_.span("pattern")
-        if flag == "l":
-            return s[end:]
-        else:
-            return s[:start]
+        return match_.group("keeper")
 
-    return inner, cmd
+    return inner, cmd, True
 
 
 def parse_sub(cmd):
-    sub_match = re.search(
-        r"(?P<sep>[/%&~])(?P<pattern>.*)(?P=sep)(?P<repl>.*)(?P=sep)",
-        cmd
-    )
+    flag = cmd[0]
+    cmd = cmd[1:].strip()
+
+    sub_match = PATTERN2_REGEX.search(cmd)
 
     if sub_match is None:
         raise CMDException(
-            "f",
+            flag,
             (
                 "Couldn't find substitution pattern boundaries "
                 f"(/%&~) at left of {cmd}."
@@ -299,18 +419,18 @@ def parse_sub(cmd):
     pattern = sub_match.group("pattern")
 
     if pattern is None:
-        raise CMDException("s", "Pattern didn't match the string.")
+        raise CMDException(flag, "Pattern didn't match the string.")
 
     repl_ = sub_match.group("repl")
-    PATTERN_REGEX = re.compile(pattern)
+    SUBPATTERN_REGEX = re.compile(pattern)
 
     cmd = cmd[sub_match.end():]
 
     def inner(s):
-        match_ = PATTERN_REGEX.sub(repl_, s)
+        match_ = SUBPATTERN_REGEX.sub(repl_, s)
         return match_
 
-    return inner, cmd
+    return inner, cmd, True
 
 
 def dirname2(s):
@@ -320,26 +440,53 @@ def dirname2(s):
     return s
 
 
+def greedy_splitext(s):
+    for _ in range(1000):
+        s, e = splitext(s.strip())
+        if e == "":
+            break
+    return s
+
+
+def escape_str(s):
+    return ESCAPE_REGEX.sub(r"\\\1", s)
+
+
+def quote_str(s):
+    c = re.sub(r"(['\\])", r"\\\1", s)
+    return "'" + c + "'"
+
+
 def parse_cmd(cmd):
     cmd = cmd.strip()
     if cmd == "":
         return (lambda x: x), None
-    elif cmd.startswith("b"):
-        return basename, cmd[1:]
-    elif cmd.startswith("d"):
-        return dirname2, cmd[1:]
+    elif cmd.lower().startswith("b"):
+        return basename, cmd[1:].strip(), True
+    elif cmd.lower().startswith("d"):
+        return dirname2, cmd[1:].strip(), True
     elif cmd.startswith("e"):
-        return (lambda x: splitext(x)[0]), cmd[1:]
-    elif cmd.startswith("l") or cmd.startswith("r"):
+        return (lambda x: splitext(x)[0]), cmd[1:].strip(), True
+    elif cmd.startswith("E"):
+        return greedy_splitext, cmd[1:].strip(), True
+    elif cmd.lower().startswith("l") or cmd.startswith("r"):
         return parse_strip(cmd)
-    elif cmd.startswith("s"):
-        cmd = cmd[1:]
+    elif cmd.lower().startswith("s"):
         return parse_sub(cmd)
+    elif cmd.lower().startswith("c"):
+        # c for cleave
+        return parse_split(cmd)
+    elif cmd.lower().startswith("o"):
+        return parse_or(cmd)
+    elif cmd.startswith("Q"):
+        return escape_str, cmd[1:].strip(), True
+    elif cmd.startswith("q"):
+        return quote_str, cmd[1:].strip(), True
     elif (
-        cmd.startswith(":") or
-        cmd.startswith("f") or
-        cmd.startswith("p") or
-        cmd.startswith("j")
+        cmd.lower().startswith(":") or
+        cmd.lower().startswith("f") or
+        cmd.lower().startswith("p") or
+        cmd.lower().startswith("j")
     ):
         raise CMDException(
             cmd,
@@ -352,26 +499,100 @@ def parse_cmd(cmd):
         raise CMDException(cmd, "Unknown command.")
 
 
+def arr_unique(s):
+    seen = set()
+    out = []
+    for si in s:
+        if si in seen:
+            continue
+
+        out.append(si)
+        seen.add(si)
+    return out
+
+
 def parse_arr_cmd(cmd):
     cmd = cmd.strip()
 
     if cmd == "":
         return (lambda x: x), None, False
     elif cmd.startswith(":"):
-        cmd = cmd[1:]
         return parse_slice(cmd)
-    elif cmd.startswith("f"):
-        cmd = cmd[1:]
+    elif cmd.lower().startswith("f"):
         return parse_filter(cmd)
-    elif cmd.startswith("p"):
-        cmd = cmd[1:]
-        return commonprefix, cmd, True
-    elif cmd.startswith("j"):
-        cmd = cmd[1:]
+    elif cmd.lower().startswith("p"):
+        return commonprefix, cmd[1:].strip(), True
+    elif cmd.lower().startswith("u"):
+        return arr_unique, cmd[1:].strip(), False
+    elif cmd.lower().startswith("j"):
         return parse_join(cmd)
+    elif cmd.lower().startswith("c"):
+        raise CMDException(
+            "c",
+            "Cannot call the cleave (split) command on an array."
+        )
+
     else:
-        fn, cmd = parse_cmd(cmd)
+        fn, cmd, is_str = parse_cmd(cmd)
         return (lambda x: list(map(fn, x))), cmd, False
+
+
+def parse_or(cmd):
+
+    flag = cmd[0]
+    cmd = cmd[1:].strip()
+
+    match_ = PATTERN_REGEX.search(cmd)
+
+    if match_ is None:
+        raise CMDException(
+            flag,
+            f"Couldn't find boundaries (/%&~) at left of {cmd}."
+        )
+
+    pattern = match_.group("pattern")
+    cmd = cmd[match_.end():]
+
+    if pattern is None:
+        raise CMDException(flag, "Pattern didn't match the string.")
+
+    def inner(s):
+        if s.strip() == "":
+            return pattern
+        else:
+            return s
+
+    return inner, cmd, True
+
+
+def parse_array_or(cmd):
+
+    flag = cmd[0]
+    cmd = cmd[1:].strip()
+
+    match_ = PATTERN_REGEX.search(cmd)
+
+    if match_ is None:
+        raise CMDException(
+            flag,
+            f"Couldn't find boundaries (/%&~) at left of {cmd}."
+        )
+
+    pattern = match_.group("pattern")
+    cmd = cmd[match_.end():]
+
+    if pattern is None:
+        raise CMDException(flag, "Pattern didn't match the string.")
+
+    def inner(s):
+        assert isinstance(s, list)
+
+        if len(s) == 0:
+            s = [pattern]
+
+        return s
+
+    return inner, cmd, False
 
 
 def take_first(li):
@@ -416,10 +637,14 @@ def parse_single(cmd):
     steps = []
     cmd = cmd.strip()
     while len(cmd) > 0:
-        fn, cmd = parse_cmd(cmd)
+        fn, cmd, is_str = parse_cmd(cmd)
         steps.append(fn)
 
         if cmd is None:
+            break
+
+        if not is_str:
+            steps.extend(parse_array(cmd))
             break
 
         cmd = cmd.strip()
@@ -429,22 +654,23 @@ def parse_single(cmd):
 def outer(nparams, line):  # noqa: C901
 
     def replacement(match):
+        arr = match.group("arr")
+        if arr == "":
+            arr = None
+
+        is_arr = arr is not None
+
         if (
             ((match.group("index") is None) or
              (match.group("index") == "")) and
-            (nparams > 1)
+            (nparams > 1) and
+            (not is_arr)
         ):
             raise CMDGroupException(match.group(), ValueError(
                 "If using replacement strings with more than 1 "
                 "parameter, the patterns must have an index or "
                 "use the array functions."
             ))
-
-        arr = match.group("arr")
-        if arr == "":
-            arr = None
-
-        is_arr = arr is not None
 
         index = match.group("index")
         if (not is_arr) and ((index is None) or (index == "")):
@@ -455,10 +681,40 @@ def outer(nparams, line):  # noqa: C901
             val = flatten_lists(line)
         else:
             index = int(index)
-            val = line[index]
 
-        if not isinstance(val, str) and not is_arr:
-            val = val[0]
+            if index < 0:
+                valid_indices = list(range(0, len(line)))
+                raise CMDGroupException(
+                    match.group(),
+                    ValueError(
+                        (f"The index given ({index}) is not valid. "
+                         "We don't support negative indexing of parameters. "
+                         f"Valid indices are {valid_indices}.")
+                    )
+                )
+            try:
+                val = line[index]
+            except IndexError:
+                valid_indices = list(range(0, len(line)))
+                raise CMDGroupException(
+                    match.group(),
+                    ValueError(
+                        (f"The index given ({index}) is not "
+                         "valid for the number of parameters "
+                         f"({len(line)}). Valid indices are "
+                         f"{valid_indices}.")
+                    )
+                )
+
+        if (not isinstance(val, str)) and (not is_arr):
+            raise CMDGroupException(
+                match.group(),
+                ValueError(
+                    (f"The received value {val} is an array, but "
+                     "we expected a string. "
+                     "Did you forget to use '@' ?")
+                )
+            )
         elif isinstance(val, str) and is_arr:
             val = [val]
 
@@ -514,6 +770,8 @@ def get_args_from_file(handle, nparams: "Optional[int]"):
         line = line.strip()
 
         if line == "":
+            continue
+        elif line.startswith("#"):
             continue
 
         line = line.split("\t")
@@ -580,7 +838,7 @@ def main():
             sys.exit(1)
 
         if cmd == args.pattern:
-            cmd = cmd + " '" + "' ".join(line) + "'"
+            cmd = cmd + " '" + "' '".join(line) + "'"
 
         # Replacess {{ with { etc
         cmd = re.sub(r"(?P<paren>[{}])(?P=paren)\s*", r"\g<paren>", cmd)

@@ -1,0 +1,238 @@
+# `partempl.py`
+
+`partempl.py` fills command templates with parameters using a simple DSL for file name manipulation.
+
+The idea is that you create a template for a command you want to run (e.g. a read mapper), and fill that template using parameters from a globbing pattern or from a TSV table.
+
+The templating syntax is inspired by [GNU Parallel replacement strings](https://www.gnu.org/software/parallel/parallel_tutorial.html#replacement-strings) but looks more like a hybrid of bash parameter expansion and sed syntax.
+Nothing quite did everything that I needed as is, so it's a hybrid.
+
+
+There are several options, but it's easiest to demonstrate before going into technical details.
+
+First I'll generate some example files to demonstrate with...
+
+```
+mkdir dir1 dir2
+
+touch {dir1,dir2}/{one,two,three}-{R1,R2}.fastq.gz
+```
+
+I'm using paired fastq reads as an example because it is a common use case for some of the grouping options supported.
+Throughout this guide, we'll use a hypothetical command `map.sh` as an example.
+
+`partempl.py` can take parameters as either a globbed pattern or a TSV table.
+A basic command will look like:
+
+```
+partempl.py "template" *-glob.txt
+# or
+partempl.py --file params.tsv "template"
+```
+
+We'll demonstrate the globbing structure more because it's more complicated, and it's easier to translate commands to the table syntax later.
+
+As a basic example, if you wanted to run a command for each input file using a globbing pattern:
+
+```
+partempl.py map.sh dir1/*.fastq.gz
+
+# map.sh 'dir1/one-R1.fastq.gz'
+# map.sh 'dir1/one-R2.fastq.gz'
+# map.sh 'dir1/three-R1.fastq.gz'
+# map.sh 'dir1/three-R2.fastq.gz'
+# map.sh 'dir1/two-R1.fastq.gz'
+# map.sh 'dir1/two-R2.fastq.gz'
+```
+
+In this case, we haven't used templating syntax at all, so `partempl.py` will just provide the parameters to the end of the "template" string (just like GNU parallel).
+We could be more explicit about where the parameter should be provided using the template syntax.
+
+```
+partempl.py 'map.sh --infile {} --verbose' dir1/*.fastq.gz
+
+# map.sh --infile dir1/one-R1.fastq.gz --verbose
+# map.sh --infile dir1/one-R2.fastq.gz --verbose
+# map.sh --infile dir1/three-R1.fastq.gz --verbose
+# map.sh --infile dir1/three-R2.fastq.gz --verbose
+# map.sh --infile dir1/two-R1.fastq.gz --verbose
+# map.sh --infile dir1/two-R2.fastq.gz --verbose
+```
+
+Here the input file will be provided where `{}` is.
+
+How about if we have multiple parameters to provide to the file?
+Say we have some paired end fastq files that we want to provide to the same command.
+Here we use [bash brace expansion](https://www.gnu.org/software/bash/manual/html_node/Brace-Expansion.html) in combination with the `--nparams` parameter.
+
+Say we want to map both `R1` and `R2` files.
+
+```
+./patempl.py --nparams 2 map.sh dir1/*-{R1,R2}.fastq.gz
+
+# map.sh 'dir1/one-R1.fastq.gz' 'dir1/one-R2.fastq.gz'
+# map.sh 'dir1/three-R1.fastq.gz' 'dir1/three-R2.fastq.gz'
+# map.sh 'dir1/two-R1.fastq.gz' 'dir1/two-R2.fastq.gz'
+```
+
+So we specified the pairs with the brace expansion `{R1,R2}`, and told the program that there are two parameters.
+If we had three parameters we could simply use e.g. `{R1,R2,unpaired}` and `--nparams 3`.
+
+Its worth looking at how the glob and braces actually expand.
+
+```
+echo dir1/*-{R1,R2}.fastq.gz
+# dir1/one-R1.fastq.gz dir1/three-R1.fastq.gz dir1/two-R1.fastq.gz dir1/one-R2.fastq.gz dir1/three-R2.fastq.gz dir1/two-R2.fastq.gz
+```
+
+So here the brace expansion `{R1,R2}` will determine how the files are grouped.
+And together with the wildcard `*`, the command expands to list all `-R1.fastq.gz` files then the `-R2.fastq.gz` files.
+`partempl.py` relies on this ordering to associate the parameters with each other.
+As long as the order is correct it will be fine, so you could just provide the list of files if you want. But if the order is out or the `--nparams` doesn't match the order properly, it will give you weird results.
+
+Make sure that there are no spaces in the braces (or make sure to use quoting), as they won't expand as you might expect.
+e.g.
+
+```
+echo dir1/*-{R1, R2}.fastq.gz
+# dir1/*-{R1, R2}.fastq.gz  # in bash, in zsh this errors
+
+echo dir1/*-{R1,' R2'}.fastq.gz
+# dir1/one-R1.fastq.gz dir1/three-R1.fastq.gz dir1/two-R1.fastq.gz dir1/*- R2.fastq.gz
+# This extra space will cause trouble too                               ^^^^
+```
+
+See the [bash brace expansion documentation](https://www.gnu.org/software/bash/manual/html_node/Brace-Expansion.html) for details.
+
+
+Just like with one argument, you can customise how the parameters are provided to the command using the templating syntax.
+
+```
+partempl.py --nparams 2 'map.sh --in1 {0} --in2 {1}' dir1/*-{R1,R2}.fastq.gz
+
+# map.sh --in1 dir1/one-R1.fastq.gz --in2 dir1/one-R2.fastq.gz
+# map.sh --in1 dir1/three-R1.fastq.gz --in2 dir1/three-R2.fastq.gz
+# map.sh --in1 dir1/two-R1.fastq.gz --in2 dir1/two-R2.fastq.gz
+```
+
+First we'll just note that instead of using `{}` to place the parameters, we must now use `{index}` to pick the correct parameter to add.
+When there is one parameter `{}` is an alias for `{0}`, but with more than one it becomes ambiguous so `partempl.py` will raise and error.
+Indexing is 0 based (start inclusive and end exclusive), just like python.
+
+
+And with that we're ready to look at some of the extra template syntax.
+Within the `{...}` blocks, we can provide commands to perform actions on the parameters.
+Some basic ones are `d` which returns the directory name, `b` with returns the filename without the directory, and `e` which strips an extension off the end of the file.
+
+Here i'll use the right strip `r` command to strip `-R1.fastq.gz` from the end of a filename, which we'll use to create an output `.bam` filename.
+
+```
+partempl.py --nparams 2 'map.sh --out "{0r/-R1.fastq.gz/}.bam" --r2 "{1}" --r1 "{0}"' dir1/*-{R1,R2}.fastq.gz
+
+# map.sh --out "dir1/one.bam" --r2 "dir1/one-R2.fastq.gz" --r1 "dir1/one-R1.fastq.gz"
+# map.sh --out "dir1/three.bam" --r2 "dir1/three-R2.fastq.gz" --r1 "dir1/three-R1.fastq.gz"
+# map.sh --out "dir1/two.bam" --r2 "dir1/two-R2.fastq.gz" --r1 "dir1/two-R1.fastq.gz"
+```
+
+You can combine commands to perform more complex operations.
+For example in the above example, we could also strip the directory name from the output file `{0dr/-R1.fastq.gz/}.bam`, which will create `one.bam` instead of `dir1/one.bam` etc.
+
+Most of the above could be done with GNU parallel style syntax, but things here can get a bit more exotic when you use the array syntax.
+We'll go into this in more detail later, but briefly `{@}` will give you access to all parameters associated with the command (e.g. `[dir1/one-R2.fastq.gz, dir1/one-R1.fastq.gz]`). We can perform operations on this array as well as the strings inside it.
+
+Instead of using the right strip function `r` above, we could create an output filename based on the common prefix of all parameters with the `p` array function.
+
+```
+partempl.py --nparams 2 'map.sh --out "{@p}.bam" --r2 "{1}" --r1 "{0}"' dir1/*-{R1,R2}.fastq.gz
+
+# map.sh --out "dir1/one-R.bam" --r2 "dir1/one-R2.fastq.gz" --r1 "dir1/one-R1.fastq.gz"
+# map.sh --out "dir1/three-R.bam" --r2 "dir1/three-R2.fastq.gz" --r1 "dir1/three-R1.fastq.gz"
+# map.sh --out "dir1/two-R.bam" --r2 "dir1/two-R2.fastq.gz" --r1 "dir1/two-R1.fastq.gz"
+```
+
+It's not quite the same, to actually get the same output filename (`dir1/one.bam` instead of `dir1/one-R.bam`) we'd have to an rstrip as well `{@pr/-R/}.bam`.
+But hopefully you get the idea.
+
+
+The array syntax becomes more useful when you need to group data.
+Say you had to split a sequencing run over multiple flow cells, and you don't want to merge the fastq files before aligning so that you can get proper read group information.
+You can group pairs by some kind of data in the glob to extract how the files should be combined.
+
+In this case, i'm going to pretend that the directories we created earlier (`dir1` and `dir2`) contain common samples that should be grouped. I'll provide that dirname to the `--group` parameter.
+
+```
+partempl.py --nparams 2 --group '{0d}' 'map.sh --out "{0d}.bam" --r1 "{0@}" --r2 "{1@}"' */*-{R1,R2}.fastq.gz
+
+# map.sh --out "dir1.bam" --r1 "dir1/one-R1.fastq.gz dir1/three-R1.fastq.gz dir1/two-R1.fastq.gz" --r2 "dir1/one-R2.fastq.gz dir1/three-R2.fastq.gz dir1/two-R2.fastq.gz"
+# map.sh --out "dir2.bam" --r1 "dir2/one-R1.fastq.gz dir2/three-R1.fastq.gz dir2/two-R1.fastq.gz" --r2 "dir2/one-R2.fastq.gz dir2/three-R2.fastq.gz dir2/two-R2.fastq.gz"
+```
+
+So what has happened here is that we've said to group by the directory `{0d}`, which has grouped all of the `*R1*` into an array `{0@}` (and `*R2*` into `{1@}`).
+By default when `partempl.py` has to output an array, it will join the elements with a space.
+So because we enclosed the command block `{0@}` in quotes the substituted string is `"dir2/one-R1.fastq.gz dir2/three-R1.fastq.gz dir2/two-R1.fastq.gz"`.
+
+We can also join arrays using the `j` command. So to join by commas instead:
+
+```
+partempl.py --nparams 2 --group '{0d}' 'map.sh --out "{0d}.bam" --r1 "{0@j/,/}" --r2 "{1@j/,/}"' */*-{R1,R2}.fastq.gz
+
+# map.sh --out "dir1.bam" --r1 "dir1/one-R1.fastq.gz,dir1/three-R1.fastq.gz,dir1/two-R1.fastq.gz" --r2 "dir1/one-R2.fastq.gz,dir1/three-R2.fastq.gz,dir1/two-R2.fastq.gz"
+# map.sh --out "dir2.bam" --r1 "dir2/one-R1.fastq.gz,dir2/three-R1.fastq.gz,dir2/two-R1.fastq.gz" --r2 "dir2/one-R2.fastq.gz,dir2/three-R2.fastq.gz,dir2/two-R2.fastq.gz"
+```
+
+
+OK. So the globbing patterns are good for when you have fairly regular files and easy globbing patterns, but sometimes it's easier to just provide a TSV file with your parameters already.
+
+E.g. in the paired run option above, you could have a file `reads.tsv` like below:
+
+```
+dir1/one-R1.fastq.gz	dir1/one-R2.fastq.gz
+dir1/three-R1.fastq.gz	dir1/three-R2.fastq.gz
+dir1/two-R1.fastq.gz	dir1/two-R2.fastq.gz
+dir2/one-R1.fastq.gz	dir2/one-R2.fastq.gz
+dir2/three-R1.fastq.gz	dir2/three-R2.fastq.gz
+dir2/two-R1.fastq.gz	dir2/two-R2.fastq.gz
+```
+
+Instead of having to match the brace expansion with the `--nparams` parameter etc, you can just directly pass the parameters as different columns.
+And then you can run pretty much the same command as above, but indead of providing the `--nparams` and a glob, you can just specify this file to `--file` and it will take the parameters from the columns.
+
+```
+partempl.py --file read_pairs.tsv 'map.sh --out "{0d}.bam" --r1 {0} --r2 {1}'
+
+# map.sh --out "dir1.bam" --r1 dir1/one-R1.fastq.gz --r2 dir1/one-R2.fastq.gz
+# map.sh --out "dir1.bam" --r1 dir1/three-R1.fastq.gz --r2 dir1/three-R2.fastq.gz
+# map.sh --out "dir1.bam" --r1 dir1/two-R1.fastq.gz --r2 dir1/two-R2.fastq.gz
+# map.sh --out "dir2.bam" --r1 dir2/one-R1.fastq.gz --r2 dir2/one-R2.fastq.gz
+# map.sh --out "dir2.bam" --r1 dir2/three-R1.fastq.gz --r2 dir2/three-R2.fastq.gz
+# map.sh --out "dir2.bam" --r1 dir2/two-R1.fastq.gz --r2 dir2/two-R2.fastq.gz
+```
+
+You could even add extra metadata columns (e.g. FASTQ read groups) and use that as a grouping pattern, which you can just access and manipulate like you did with the files.
+
+
+So there's a lot of flexibility in the system, and it will all automatically submit the appropriate number of jobs depending on grouping parameters etc.
+
+
+## String commands
+
+- `b` basename
+- `d` dirname
+- `e` strip extension
+- `l` left strip
+- `r` right strip
+- `s` substitute
+- `c` cleave (it's split but `s` was taken). Returns an array
+- `o` or (it's default but `d` was taken).
+- `q` quote the string in single quotes `'` to avoid weird characters.
+
+
+## Array commands
+
+- `:` Indexing and slicing
+- `f` Filter the array by regular expression
+- `p` Returns the common prefix of all elements in the array. Returns a string.
+- `u` Get the unique values in the array.
+- `j` Join the array using a string. Returns a string.
+
+All string commands except `c` (cleave/split) can also be used on arrays and are broadcast over all elements.
