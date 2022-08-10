@@ -6,10 +6,43 @@ import sys
 
 import argparse
 
+from typing import Optional
+
 __version__ = "0.0.1"
 
 
-REGEX = re.compile(r"(?<!{){(?P<index>\d+)?(?P<arr>@)?(?P<cmd>[^{}]*)}(?!})")
+REGEX = re.compile(
+    r"(?<!{){(?P<index>\d+)?(?P<arr>@)?(?P<cmd>[^{}]*)}(?!})"
+)
+
+
+class CMDException(Exception):
+    def __init__(self, cmd, string):
+        self.cmd = cmd
+        self.string = string
+        return
+
+    def __str__(self):
+        return f"ERROR: while evaluating '{self.cmd}': {self.string}"
+
+
+class CMDGroupException(Exception):
+    def __init__(self, cmd, cmderr):
+        self.cmd = cmd
+        self.cmderr = cmderr
+        return
+
+    def __str__(self):
+        if isinstance(self.cmderr, CMDException):
+            return (
+                f"ERROR: while evaluating '{self.cmd}' command "
+                f"'{self.cmderr.cmd}': {self.cmderr.string}"
+            )
+        else:
+            return (
+                f"ERROR: while evaluating '{self.cmd}' "
+                f"during runtime: {str(self.cmderr)}"
+            )
 
 
 def cli(prog, args):
@@ -20,7 +53,7 @@ def cli(prog, args):
 
     parser.add_argument(
         "-p", "--nparams",
-        default=1,
+        default=None,
         type=int,
         help="How many parameters do you expect?",
     )
@@ -50,11 +83,10 @@ def cli(prog, args):
         )
     )
 
-    # This is also a special action, that just prints the software name and
-    # version, then exits.
     parser.add_argument(
         "--version",
         action="version",
+        help="Print the version and exit.",
         version="%(prog)s " + __version__
     )
 
@@ -125,7 +157,10 @@ def parse_slice(cmd):
         is_str = True
 
     else:
-        raise ValueError("Indexer match couldn't find a slice or pos")
+        raise CMDException(
+            ":",
+            f"Indexer match couldn't find a slice or pos at left of {cmd}."
+        )
 
     return (lambda x: x[indexer]), cmd, is_str
 
@@ -136,9 +171,15 @@ def parse_filter(cmd):
         cmd
     )
 
+    if filter_match is None:
+        raise CMDException(
+            "f",
+            f"Couldn't find filter pattern boundaries (/%&~) at left of {cmd}."
+        )
+
     pattern = filter_match.group("pattern")
     if pattern is None:
-        raise ValueError("Pattern didn't match the string.")
+        raise CMDException("f", "Pattern didn't match the string.")
 
     PATTERN_REGEX = re.compile("(?P<pattern>" + pattern + ")")
     cmd = cmd[filter_match.end():]
@@ -151,6 +192,15 @@ def parse_filter(cmd):
                 continue
 
             out.append(si)
+
+        if len(out) == 0:
+            raise CMDException(
+                "f",
+                (
+                    f"Filter pattern '{pattern}' "
+                    f"returned a zero-sized array from {s}."
+                )
+            )
         return out
 
     return inner, cmd, False
@@ -162,12 +212,15 @@ def parse_join(cmd):
         cmd
     )
     if join_match is None:
-        raise ValueError("Pattern didn't match the string.")
+        raise CMDException(
+            "j",
+            f"Couldn't find join string boundaries (/%&~) at left of {cmd}."
+        )
 
     pattern = join_match.group("pattern")
 
     if pattern is None:
-        raise ValueError("Pattern didn't match the string.")
+        raise CMDException("j", "Pattern didn't match the string.")
 
     cmd = cmd[join_match.end():]
 
@@ -190,13 +243,19 @@ def parse_strip(cmd):
 
     cmd = cmd[1:]
     strip_match = re.search(
-        r"(?P<sep>[/%&~])(?P<pattern>.*)(?P=sep)",
+        r"^\s*(?P<sep>[/%&~])(?P<pattern>.*)(?P=sep)",
         cmd
     )
 
+    if strip_match is None:
+        raise CMDException(
+            flag,
+            f"Couldn't find match boundaries (/%&~) at left of {cmd}."
+        )
+
     pattern = strip_match.group("pattern")
     if pattern is None:
-        raise ValueError("Pattern didn't match the string.")
+        raise CMDException(flag, "Pattern didn't match the string.")
 
     PATTERN_REGEX = re.compile(
         start +
@@ -228,10 +287,19 @@ def parse_sub(cmd):
         cmd
     )
 
+    if sub_match is None:
+        raise CMDException(
+            "f",
+            (
+                "Couldn't find substitution pattern boundaries "
+                f"(/%&~) at left of {cmd}."
+            )
+        )
+
     pattern = sub_match.group("pattern")
 
     if pattern is None:
-        raise ValueError("Pattern didn't match the string.")
+        raise CMDException("s", "Pattern didn't match the string.")
 
     repl_ = sub_match.group("repl")
     PATTERN_REGEX = re.compile(pattern)
@@ -267,8 +335,21 @@ def parse_cmd(cmd):
     elif cmd.startswith("s"):
         cmd = cmd[1:]
         return parse_sub(cmd)
+    elif (
+        cmd.startswith(":") or
+        cmd.startswith("f") or
+        cmd.startswith("p") or
+        cmd.startswith("j")
+    ):
+        raise CMDException(
+            cmd,
+            (
+                "Got an array command but we only have a string. "
+                "Did you forget to use '@' ?"
+            )
+        )
     else:
-        raise ValueError(f"Got unknown command: '{cmd}'.")
+        raise CMDException(cmd, "Unknown command.")
 
 
 def parse_arr_cmd(cmd):
@@ -345,13 +426,19 @@ def parse_single(cmd):
     return steps
 
 
-def outer(nparams, line):
+def outer(nparams, line):  # noqa: C901
+
     def replacement(match):
-        if (match.group("index") == "") and (nparams > 1):
-            raise ValueError(
+        if (
+            ((match.group("index") is None) or
+             (match.group("index") == "")) and
+            (nparams > 1)
+        ):
+            raise CMDGroupException(match.group(), ValueError(
                 "If using replacement strings with more than 1 "
-                "parameter, the patterns must have an index."
-            )
+                "parameter, the patterns must have an index or "
+                "use the array functions."
+            ))
 
         arr = match.group("arr")
         if arr == "":
@@ -372,16 +459,24 @@ def outer(nparams, line):
 
         if not isinstance(val, str) and not is_arr:
             val = val[0]
+        elif isinstance(val, str) and is_arr:
+            val = [val]
 
         cmd = match.group("cmd")
 
-        if is_arr:
-            fns = parse_array(cmd)
-        else:
-            fns = parse_single(cmd)
+        try:
+            if is_arr:
+                fns = parse_array(cmd)
+            else:
+                fns = parse_single(cmd)
+        except CMDException as e:
+            raise CMDGroupException(match.group(), e)
 
         for fn in fns:
-            val = fn(val)
+            try:
+                val = fn(val)
+            except Exception as e:
+                raise CMDGroupException(match.group(), e)
         return str(val)
     return replacement
 
@@ -412,7 +507,8 @@ def get_args(args: "list[str]", nparams: int):
     return out
 
 
-def get_args_from_file(handle, nparams: int):
+def get_args_from_file(handle, nparams: "Optional[int]"):
+
     out = []
     for i, line in enumerate(handle, 1):
         line = line.strip()
@@ -422,7 +518,7 @@ def get_args_from_file(handle, nparams: int):
 
         line = line.split("\t")
 
-        if len(line) != nparams:
+        if (nparams is not None) and (len(line) != nparams):
             raise ValueError(
                 f"The file doesn't have the specified number "
                 f"of parameters ({nparams}) on line {i}."
@@ -448,7 +544,11 @@ def get_groups(command, nparams, lines):
 
     for line in lines:
         fn = outer(nparams, line)
-        cmd = REGEX.sub(fn, command)
+        try:
+            cmd = REGEX.sub(fn, command)
+        except CMDGroupException as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
         groups.append(cmd)
     return groups
 
@@ -457,22 +557,33 @@ def main():
     args = cli(prog=sys.argv[0], args=sys.argv[1:])
     if args.file is not None:
         lines = get_args_from_file(args.file, args.nparams)
+        nparams = len(lines[0])
     else:
-        lines = get_args(args.glob, args.nparams)
+        if args.nparams is None:
+            nparams = 1
+        else:
+            nparams = args.nparams
+        lines = get_args(args.glob, nparams)
 
     if args.group is not None:
-        groups = get_groups(args.group, args.nparams, lines)
+        groups = get_groups(args.group, nparams, lines)
         lines = group_by(groups, lines)
     else:
         groups = None
 
     for line in lines:
-        fn = outer(args.nparams, line)
-        cmd = REGEX.sub(fn, args.pattern)
+        fn = outer(nparams, line)
+        try:
+            cmd = REGEX.sub(fn, args.pattern)
+        except CMDGroupException as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
+
         if cmd == args.pattern:
             cmd = cmd + " '" + "' ".join(line) + "'"
 
-        cmd = re.sub(r"(?P<paren>[{}])(?P=paren)", r"\g<paren>", cmd)
+        # Replacess {{ with { etc
+        cmd = re.sub(r"(?P<paren>[{}])(?P=paren)\s*", r"\g<paren>", cmd)
         print(cmd, file=args.outfile)
     return
 

@@ -13,6 +13,7 @@ DRY_RUN=false
 PACK=false
 MODULES=( )
 GROUP=
+FILE=
 
 NTASKS_PER_NODE=
 NODES=
@@ -32,14 +33,11 @@ SLURM_ACCOUNT_DEFAULT="${PAWSEY_PROJECT:-UNSET}"
 SLURM_PARTITION_SET=false
 SLURM_PARTITION_DEFAULT="work"
 
-VALID_SLURM_FLAGS=( --contiguous -h --help -H --hold --ignore-pbs -O --overcommit -s --oversubscribe --parsable --spread-job -Q --quiet --reboot --requeue -Q --quiet --reboot --requeue --test-only --usage --use-min-nodes -v --verbose -W --wait -V --version )
-VALID_SLURM_FLAGS_OPTIONAL_VALUE=( --exclusive --get-user-env --nice -k --no-kill --propagate )
-VALID_SLURM_ARGS=( -a --array -A --account --bb --bbf -b --begin --comment --cpu-freq -c --cpus-per-task -d --dependency --deadline --delay-boot -D --chdir -e --error --export --export-file --get-user-env --gid --gres --gres-flags -i --input -J --job-name -L --licenses -M --clusters --container -m --distribution --mail-type --mail-user --mcs-label -n --ntasks --no-requeue --ntasks-per-node -N --nodes -o --output -p --partition --power --priority --profile -q --qos -S --core-spec --signal --switches --thread-spec -t --time --time-min --uid --wckey --wrap --cluster-constraint -C --constraint -F --nodefile --mem --mincpus --reservation --tmp -w --nodelist -x --exclude --mem-per-cpu --sockets-per-node --cores-per-socket --threads-per-core -B --extra-node-info --ntasks-per-core --ntasks-per-socket --hint --mem-bind --cpus-per-gpu -G --gpus --gpu-bind --gpu-freq --gpus-per-node --gpus-per-socket --gpus-per-task --mem-per-gpu )
-
 # This sets -x
 DEBUG=false
 
 source "${DIRNAME}/../lib/cli.sh"
+source "${DIRNAME}/../lib/batch.sh"
 
 usage() {
     echo -e "USAGE:
@@ -189,6 +187,11 @@ do
             GROUP="$2"
             shift 2
             ;;
+        --batch-file)
+            check_param "--batch-file" "${2:-}"
+            FILE="$2"
+            shift 2
+            ;;
         --batch-pack)
             PACK=true
             shift
@@ -234,7 +237,7 @@ do
             break
             ;;
         *)
-        if isin "$1" "${VALID_SLURM_FLAGS[@]}"
+        if isin "$1" "${VALID_SBATCH_FLAGS[@]}"
         then
             SLURM_ARGS=( "${SLURM_ARGS[@]}" "$1")
             shift
@@ -287,7 +290,7 @@ do
                 ;;
         esac
 
-        if ! isin "${THIS_ARG}" ${VALID_SLURM_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SLURM_ARGS[@]}
+        if ! isin "${THIS_ARG}" ${VALID_SBATCH_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SBATCH_ARGS[@]}
         then
             echo_stderr "WARNING: We encountered an unexpected argument (${THIS_ARG}) before --."
             echo_stderr "WARNING: We'll continue as if you had used -- (it's best to explicitly provide it)."
@@ -297,7 +300,7 @@ do
 
         SLURM_ARGS=( "${SLURM_ARGS[@]}" "${THIS_ARG}" )
 
-        if ( isin "${THIS_ARG}" "${VALID_SLURM_ARGS[@]}" ) && [ -z "${NEXT_ARG:-}" ]
+        if ( isin "${THIS_ARG}" "${VALID_SBATCH_ARGS[@]}" ) && [ -z "${NEXT_ARG:-}" ]
         then
             echo_stderr "ERROR: ${THIS_ARG} expects a value."
             exit 1
@@ -377,18 +380,6 @@ SCRIPT=$1
 shift
 POSITIONAL=( "$@" )
 
-if [ "${#POSITIONAL[@]}" = 0 ]
-then
-    echo_stderr "ERROR: You have not provided any files to operate on."
-    usage_err
-    exit 1
-elif [ $(( "${#POSITIONAL[@]}" % "${NPARAMS:-1}" )) != 0 ]
-then
-    echo_stderr "ERROR: The number of inputs specified by your glob (${#POSITIONAL[@]}) is not a multiple of your nparams (${NPARAMS:-1})"
-    usage_err
-    exit 1
-fi
-
 if [ -z "${GROUP:-}" ]
 then
     GROUP_ARG=""
@@ -396,30 +387,15 @@ else
     GROUP_ARG=" --group '${GROUP}' "
 fi
 
-CMDS=$( "${DIRNAME}"/expansion.py ${GROUP_ARG} --nparams "${NPARAMS}" "${SCRIPT}" "${POSITIONAL[@]}" )
-NJOBS=$(echo "${CMDS}" | wc -l)
-
-SRUN_SCRIPT="${TMPDIR:-.}/.tmp_${TIME}_$$"
-cat <<EOF > "${SRUN_SCRIPT}" || true
-#!/usr/bin/env bash
-
-readarray -t CMDS <<EOF_CMDS || true
-${CMDS[@]}
-EOF_CMDS
-export CMDS
-
-export INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
-
-if [ "\${INDEX}" -gt $(( ${NJOBS} - 1 )) ]
+if [ -z "${FILE:-}" ]
 then
-    exit 0
+    FILE_ARG=""
+else
+    FILE_ARG=" --file '${FILE}' "
 fi
 
-eval "\${CMDS[\${INDEX}]}"
-EOF
-
-trap "rm -f -- ${SRUN_SCRIPT}" ERR
-chmod a+x "${SRUN_SCRIPT}"
+CMDS=$( "${DIRNAME}"/cmd_expansion.py ${GROUP_ARG} ${FILE_ARG} --nparams "${NPARAMS}" "${SCRIPT}" "${POSITIONAL[@]}" )
+NJOBS=$(echo "${CMDS}" | wc -l)
 
 read -r -d '' BATCH_SCRIPT <<EOF || true
 #!/bin/bash --login
@@ -428,15 +404,41 @@ set -euo pipefail
 
 module load ${MODULES[@]}
 
-trap "rm -f -- ${SRUN_SCRIPT}" EXIT
+JOBID="\${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
+
+SRUN_SCRIPT="${TMPDIR:-.}/.tmp_${TIME}_\${JOBID}_\$\$"
+cat <<EOF_SRUN > "\${SRUN_SCRIPT}" || true
+#!/usr/bin/env bash
+
+readarray -t CMDS <<EOF_CMDS || true
+${CMDS[@]}
+EOF_CMDS
+export CMDS
+
+# Wrapping this in a function avoids some escaping hell
+runner() {
+    INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
+
+    if [ "\${INDEX}" -gt $(( ${NJOBS} - 1 )) ]
+    then
+        exit 0
+    fi
+
+    echo "\${CMDS[\${INDEX}]}"
+}
+
+eval "\$(runner)"
+EOF_SRUN
+
+trap "rm -f -- \${SRUN_SCRIPT}" EXIT
+chmod a+x "\${SRUN_SCRIPT}"
 
 srun --nodes "\${SLURM_JOB_NUM_NODES:-1}" \
   --ntasks "\${SLURM_NTASKS:-1}" \
   --cpus-per-task "\${SLURM_CPUS_PER_TASK:-1}" \
   --export=all \
-  ${SRUN_SCRIPT}
+  \${SRUN_SCRIPT}
 
-JOBID="\${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
 seff "\${JOBID}" || true
 EOF
 
@@ -444,7 +446,11 @@ if [ "${PACK}" = true ]
 then
     if [ -z "${NTASKS:-}" ]
     then
-        echo_stderr "we shouldnt be able to reach this point."
+        echo_stderr "ERROR: If you wish to use a packed job (--batch-pack), you must provide --ntasks > 1."
+        exit 1
+    elif [ "${NTASKS:-}" -le 1 ]
+    then
+        echo_stderr "ERROR: If you wish to use a packed job (--batch-pack), you must provide --ntasks > 1."
         exit 1
     fi
     ARRAY_STR="0-$(( ${NJOBS} - 1 )):${NTASKS}"
@@ -455,7 +461,6 @@ fi
 if [ "${DRY_RUN}" = "true" ]
 then
     echo "${BATCH_SCRIPT:-}"
-    cat "${SRUN_SCRIPT}"
     echo "BATCH:" sbatch --array="${ARRAY_STR}" "${SLURM_ARGS[@]}"
 else
     SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch --array="${ARRAY_STR}" "${SLURM_ARGS[@]}")
