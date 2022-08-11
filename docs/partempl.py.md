@@ -251,10 +251,30 @@ As long as all of the boundary characters are the same, any of those characters 
 
 ## Array commands
 
-- `:` Indexing and slicing
-- `f` Filter the array by regular expression
-- `p` Returns the common prefix of all elements in the array. Returns a string.
-- `u` Get the unique values in the array.
-- `j` Join the array using a string. Returns a string.
+You can access the arrays using the `@` operator at the beginning of the template pattern.
+
+```
+# Single row, access all values in the row.
+partempl.py --nparams 2 "{@}" dir/one.fastq.gz dir/two.fastq.gz
+# dir/one.fastq.gz dir/two.fastq.gz
+
+# Grouped row by directory name, each column is now an array, so we can access a column array like so.
+partempl.py --nparams 2 --group "{0d}" "{1@}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz dir/four.fastq.gz
+# dir/three.fastq.gz dir/four.fastq.gz
+
+# Using @ without an index in a grouped row, flattens the columns into a single array.
+partempl.py --nparams 2 --group "{0d}" "{1@}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz dir/four.fastq.gz
+dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz dir/four.fastq.gz
+```
+
+- `:<int>` Indexing an array. Returns a string. `partempl.py --nparams 2 "{@:1}" dir/one.fastq.gz dir/two.fastq.gz  # dir/two.fastq.gz`
+- `:<int>:<int>` Slicing an array. Leaving one of the ints empty (e.g. `::<int>` or `:<int>:` will replace the missing value with the start or end, respectively). `partempl.py --nparams 3 "{@:0:2}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/one.fastq.gz dir/two.fastq.gz`
+- `f` Filter the array by regular expression. `partempl.py --nparams 3 "{@f/o/}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/one.fastq.gz dir/two.fastq.gz`, selects only matches containing an `o` character. Filter also supports a special match inversion flag `^` directly after `f` to return all elements that don't match the filter `partempl.py --nparams 3 "{@f/o/}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/three.fastq.gz`. Note that in this case, the returned value is still an array, but with a single element. People might be expecting `!` to negate matches, but bash treats `!` as a special character and it would be cumbersome to escape it all of the time. `^` is taken from the negation syntax in regular expression boxes e.g. `[^ab]` matches any character except `a` or `b`
+- `p` Returns the common prefix of all elements in the array. Returns a string. `partempl.py --nparams 3 "{@p}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/`
+- `u` Get the unique values in the array. `partempl.py --nparams 3 "{@u}" dir/one.fastq.gz dir/two.fastq.gz dir/one.fastq.gz  # dir/one.fastq.gz dir/two.fastq.gz`.
+- `j` Join the array using a string. Returns a string. `partempl.py --nparams 3 "{@j/,/}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/one.fastq.gz,dir/two.fastq.gz,dir/three.fastq.gz`. Note that the default behaviour when returning an array is equivalend to `j/ /`.
 
 All string commands except `c` (cleave/split) can also be used on arrays and are broadcast over all elements.
+
+Note that `:<int>` (indexing), `p`, and `j` all return strings and array commands can no-longer be used on the output.
+Conversely, the string `c` command will convert a string to an array, which enables the array commands.
