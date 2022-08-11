@@ -218,16 +218,30 @@ So there's a lot of flexibility in the system, and it will all automatically sub
 
 - `b` basename `partempl.py "{b}" dir/one.fastq.gz  # one.fastq.gz`
 - `d` dirname `partempl.py "{d}" dir/one.fastq.gz  # dir`
-- `e` strip extension `partempl.py "{e}" dir/one.fastq.gz  # dir/one.fastq`  `partempl.py "{ee}" dir/one.fastq.gz  # dir/one`
+- `e` strip extension `partempl.py "{e}" dir/one.fastq.gz  # dir/one.fastq`. Use it n times to strip n extensions `partempl.py "{ee}" dir/one.fastq.gz  # dir/one`
 - `l` left strip `partempl.py "{l/di/}" dir/one.fastq.gz  # r/one.fastq.gz`
 - `r` right strip `partempl.py "{r/q.gz/}" dir/one.fastq.gz  # dir/one.fast`
 - `s` substitute `partempl.py "{s/one/two/}" dir/one.fastq.gz  # dir/two.fastq.gz`
 - `c` cleave (it's split but `s` was taken). Returns an array. `partempl.py "{c/ne/}" dir/one.fastq.gz  # dir/o .fastq.gz`
-- `o` or (it's default but `d` was taken).  `partempl.py "{s/.*// o/default/}" dir/one.fastq.gz  # default`. The `s` command returns an empty string, so `default` is given.
+- `o` or (it's default but `d` was taken, think `o`r).  `partempl.py "{s/.*// o/default/}" dir/one.fastq.gz  # default`. The `s` command returns an empty string, so `default` is given.
 - `q` quote the string in single quotes `'` to avoid weird characters.  `partempl.py "{q}" dir/one.fastq.gz  # 'dir/one.fastq.gz'`
 
 Note that `l`, `r`, `s`, and `c` also support python regular expression syntax. E.g. in the `o` example we used `s` to match a sequence of any character `.*` with an empty string. partempl.py "{l/.*\./}" dir/one.fastq.gz
 
+Substitution (`s`) patterns are also how you would insert text to the beginning or end of a string, using the `^` or `$` special regex characters, which match the beginning and end of the string respectively.
+e.g.
+
+```
+partempl.py "{s/^/howdy/}" dir/one.fastq.gz  # howdydir/two.fastq.gz
+partempl.py "{s/$/howdy/}" dir/one.fastq.gz  # dir/two.fastq.gzhowdy
+```
+
+Note that if the final template replacement results in an empty string being returned, `partempl.py` will raise an error as empty strings can cause errors.
+Probably the behaviour you're after in this case is to return an empty string in quotes, as bash will still interpret this as an empty string instead of just whitespace.
+If you wish to suppress this error, you can provide the `o` command without the pattern boundaries at the very end of the command.
+This will allow `partempl.py` to return an empty string.
+
+`o` commands without pattern boundaries that are in the middle of the template block will still raise an error.
 
 ### alt command modes
 
@@ -278,3 +292,9 @@ All string commands except `c` (cleave/split) can also be used on arrays and are
 
 Note that `:<int>` (indexing), `p`, and `j` all return strings and array commands can no-longer be used on the output.
 Conversely, the string `c` command will convert a string to an array, which enables the array commands.
+
+Both `:<int>:<int>` (slicing) and `f` commands have the potential to return empty arrays which `partempl.py` will raise as an error as empty strings can cause unexpected behaviour in bash commands.
+These commands both support a special version of the `o` (default) string command. If an `o` command is given immediately after a filter or slice and the command returns an empty array, `o` will return a 1 element array filled with the value given.
+If you don't really want to provide a value, you can just use `o//` to create a single element array containing an empty string.
+
+The same rules about returning empty strings also applies to returning arrays. If the joining of an array would result in an empty string being output, it will raise an error, which you can suppress with a terminal `o` as before (but probably you want to `q`uote it instead).

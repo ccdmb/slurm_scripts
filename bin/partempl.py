@@ -41,6 +41,8 @@ GREEDY_REGEX = re.compile(
     r"(?P<nongreedy>\?)?"
 )
 
+TERMINAL_OR = re.compile(r"^\s*[oO]\s*$")
+
 
 class CMDException(Exception):
     def __init__(self, cmd, string):
@@ -479,10 +481,26 @@ def quote_str(s):
     return "'" + c + "'"
 
 
+def raise_if_empty(s):
+    if isinstance(s, list) and (len(s) == 0):
+        s = ""
+    elif isinstance(s, list):
+        s = "".join(map(str, s))
+
+    if s.strip() == "":
+        raise ValueError(
+            "Attempting to return an empty string. "
+            "Consider quoting your string (`s`), "
+            "or add a final `o` so suppress this error."
+        )
+    return s
+
 def parse_cmd(cmd):  # noqa: C901
     cmd = cmd.strip()
-    if cmd == "":
-        return (lambda x: x), None
+    if TERMINAL_OR.search(cmd) is not None:
+        return (lambda x: x), None, True
+    elif cmd == "":
+        return raise_if_empty, None, True
     elif cmd.lower().startswith("b"):
         return basename, cmd[1:].strip(), True
     elif cmd.lower().startswith("d"):
@@ -536,8 +554,10 @@ def arr_unique(s):
 def parse_arr_cmd(cmd):
     cmd = cmd.strip()
 
-    if cmd == "":
-        return (lambda x: x), None, False
+    if TERMINAL_OR.search(cmd) is not None:
+        return (lambda x: x), None, True
+    elif cmd == "":
+        return raise_if_empty, None, True
     elif cmd.startswith(":"):
         return parse_slice(cmd)
     elif cmd.lower().startswith("f"):
@@ -637,11 +657,11 @@ def parse_array(cmd):
     steps = []
 
     cmd = cmd.strip()
-    while len(cmd) > 0:
+    while cmd is not None:
         fn, cmd, is_str = parse_arr_cmd(cmd)
         steps.append(fn)
 
-        if (cmd is None) or (cmd == ""):
+        if cmd is None:
             break
 
         cmd = cmd.strip()
@@ -658,7 +678,7 @@ def parse_single(cmd):
 
     steps = []
     cmd = cmd.strip()
-    while len(cmd) > 0:
+    while cmd is not None:
         fn, cmd, is_str = parse_cmd(cmd)
         steps.append(fn)
 
