@@ -216,15 +216,37 @@ So there's a lot of flexibility in the system, and it will all automatically sub
 
 ## String commands
 
-- `b` basename
-- `d` dirname
-- `e` strip extension
-- `l` left strip
-- `r` right strip
-- `s` substitute
-- `c` cleave (it's split but `s` was taken). Returns an array
-- `o` or (it's default but `d` was taken).
-- `q` quote the string in single quotes `'` to avoid weird characters.
+- `b` basename `partempl.py "{b}" dir/one.fastq.gz  # one.fastq.gz`
+- `d` dirname `partempl.py "{d}" dir/one.fastq.gz  # dir`
+- `e` strip extension `partempl.py "{e}" dir/one.fastq.gz  # dir/one.fastq`  `partempl.py "{ee}" dir/one.fastq.gz  # dir/one`
+- `l` left strip `partempl.py "{l/di/}" dir/one.fastq.gz  # r/one.fastq.gz`
+- `r` right strip `partempl.py "{r/q.gz/}" dir/one.fastq.gz  # dir/one.fast`
+- `s` substitute `partempl.py "{s/one/two/}" dir/one.fastq.gz  # dir/two.fastq.gz`
+- `c` cleave (it's split but `s` was taken). Returns an array. `partempl.py "{c/ne/}" dir/one.fastq.gz  # dir/o .fastq.gz`
+- `o` or (it's default but `d` was taken).  `partempl.py "{s/.*// o/default/}" dir/one.fastq.gz  # default`. The `s` command returns an empty string, so `default` is given.
+- `q` quote the string in single quotes `'` to avoid weird characters.  `partempl.py "{q}" dir/one.fastq.gz  # 'dir/one.fastq.gz'`
+
+Note that `l`, `r`, `s`, and `c` also support python regular expression syntax. E.g. in the `o` example we used `s` to match a sequence of any character `.*` with an empty string. partempl.py "{l/.*\./}" dir/one.fastq.gz
+
+
+### alt command modes
+
+`e`, `l`, `r`, and `q` all support an uppercase variant which affects the function of the command.
+All other commands are case insensitive.
+
+- `E` strips the extension greedily. `partempl.py "{E}" dir/one.fastq.gz  # dir/one`. So while `e` removes extensions one at a time (and you can use the command multiple times), `E` just automatically removes all extensions.
+- `L` strips greedily from the left. This becomes important if using regular expressions. `partempl.py "{L/.*\./}" dir/one.fastq.gz  # gz`, compare with `partempl.py "{l/.*\./}" dir/one.fastq.gz  # fastq.gz`.
+- `R` strips greedily from the right. `partempl.py "{R/\..*/}" dir/one.fastq.gz  # dir/one`, compare with `partempl.py "{r/\..*/}" dir/one.fastq.gz  # dir/one.fastq`.
+- `Q` Uses backslash escaping instead of single quotes. Say your path had a space in it... `partempl.py "{q}" 'dir/on e.fastq.gz'  # dir/my\ data.fastq.gz` compare to `partempl.py "{q}" 'dir/on e.fastq.gz'  # 'dir/my data.fastq.gz'`.
+
+
+### command pattern boundaries
+
+Some of the commands take arguments from a pair of boundary characters.
+In the above examples we've used `/` as this boundary character, as it's the standard one for regular expressions.
+But if you had to match a literal `/` in the argument, you'd have to backslash escape it. Otherwise the pattern will pick up the wrong closing boundary character.
+`partempl.py` also supports the use of characters `%&~` as boundary characters, so e.g. if you wanted to add a new directory to the filename, you could use `partempl.py "{s~dir/~nested/dirs/~}" dir/one.fastq.gz  # nested/dirs/one.fastq.gz`. No need to escape!
+As long as all of the boundary characters are the same, any of those characters will work.
 
 
 ## Array commands

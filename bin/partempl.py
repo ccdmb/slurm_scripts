@@ -16,11 +16,15 @@ REGEX = re.compile(
 )
 
 PATTERN_REGEX = re.compile(
-    r"(?P<sep>[/%&~])(?P<pattern>.*?)(?P=sep)"
+    r"(?<!\\)(?P<sep>[/%&~])(?P<pattern>.*?)(?<!\\)(?P=sep)"
 )
 
 PATTERN2_REGEX = re.compile(
-    r"(?P<sep>[/%&~])(?P<pattern>.*?)(?P=sep)(?P<repl>.*?)(?P=sep)"
+    r"(?<!\\)(?P<sep>[/%&~])"
+    r"(?P<pattern>.*?)"
+    r"(?<!\\)(?P=sep)"
+    r"(?P<repl>.*?)"
+    r"(?<!\\)(?P=sep)"
 )
 
 SLICE_REGEX = re.compile(
@@ -30,6 +34,12 @@ SLICE_REGEX = re.compile(
 POS_REGEX = re.compile(r"^\s*(?P<pos>-?\d+)")
 
 ESCAPE_REGEX = re.compile(r"([^a-zA-Z0-9,._+:@%/\-])")
+
+GREEDY_REGEX = re.compile(
+    r"(?<!\\)"
+    r"(?P<operator>\*|\+|\?|\{\s*\d+\s*,\s*\}|\{\s*,\s*\d+\s*\}|\{\s*\d+\s*\,\s*\d+\s*\})"  # noqa: E501
+    r"(?P<nongreedy>\?)?"
+)
 
 
 class CMDException(Exception):
@@ -343,24 +353,33 @@ def parse_split(cmd):
     return inner, cmd, False
 
 
+def greedy_invert(s):
+
+    def invert_greedy_regex(match):
+        if match.group("nongreedy") is None:
+            nongreedy = "?"
+        else:
+            nongreedy = ""
+        return match.group("operator") + nongreedy
+
+    return GREEDY_REGEX.sub(invert_greedy_regex, s)
+
+
 def parse_strip(cmd):
     flag = cmd[0]
     cmd = cmd[1:].strip()
 
     if flag.lower() == "l":
         start = "^"
-        if flag == "l":
-            end = "(?P<keeper>.*?)$"
-        else:
-            # GREEDY
-            end = "(?P<keeper>.*)$"
+        # For the left case we have to modify the user regex
+        end = "(?P<keeper>.*)$"
 
     elif flag.lower() == "r":
-        if flag == "l":
-            start = "^(?P<keeper>.*?)"
+        if flag == "r":
+            start = "^(?P<keeper>.*)"
         else:
             # GREEDY
-            start = "^(?P<keeper>.*)"
+            start = "^(?P<keeper>.*?)"
         end = "$"
     else:
         raise CMDException(
@@ -379,6 +398,9 @@ def parse_strip(cmd):
     pattern = strip_match.group("pattern")
     if pattern is None:
         raise CMDException(flag, "Pattern didn't match the string.")
+
+    if flag == "l":
+        pattern = greedy_invert(pattern)
 
     SUBPATTERN_REGEX = re.compile(
         start +
@@ -457,7 +479,7 @@ def quote_str(s):
     return "'" + c + "'"
 
 
-def parse_cmd(cmd):
+def parse_cmd(cmd):  # noqa: C901
     cmd = cmd.strip()
     if cmd == "":
         return (lambda x: x), None
@@ -469,7 +491,7 @@ def parse_cmd(cmd):
         return (lambda x: splitext(x)[0]), cmd[1:].strip(), True
     elif cmd.startswith("E"):
         return greedy_splitext, cmd[1:].strip(), True
-    elif cmd.lower().startswith("l") or cmd.startswith("r"):
+    elif cmd.lower().startswith("l") or cmd.lower().startswith("r"):
         return parse_strip(cmd)
     elif cmd.lower().startswith("s"):
         return parse_sub(cmd)
