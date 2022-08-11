@@ -68,7 +68,7 @@ Here we use [bash brace expansion](https://www.gnu.org/software/bash/manual/html
 Say we want to map both `R1` and `R2` files.
 
 ```
-./patempl.py --nparams 2 map.sh dir1/*-{R1,R2}.fastq.gz
+./partempl.py --nparams 2 map.sh dir1/*-{R1,R2}.fastq.gz
 
 # map.sh 'dir1/one-R1.fastq.gz' 'dir1/one-R2.fastq.gz'
 # map.sh 'dir1/three-R1.fastq.gz' 'dir1/three-R2.fastq.gz'
@@ -225,6 +225,10 @@ So there's a lot of flexibility in the system, and it will all automatically sub
 - `c` cleave (it's split but `s` was taken). Returns an array. `partempl.py "{c/ne/}" dir/one.fastq.gz  # dir/o .fastq.gz`
 - `o` or (it's default but `d` was taken, think `o`r).  `partempl.py "{s/.*// o/default/}" dir/one.fastq.gz  # default`. The `s` command returns an empty string, so `default` is given.
 - `q` quote the string in single quotes `'` to avoid weird characters.  `partempl.py "{q}" dir/one.fastq.gz  # 'dir/one.fastq.gz'`
+- `^` Convert the string to uppercase.
+- `_` Conert the string to lowercase.
+- `^^` Convert the first character of the string to uppercase.
+- `__` (two underscores), convert first character to lowercase.
 
 Note that `l`, `r`, `s`, and `c` also support python regular expression syntax. E.g. in the `o` example we used `s` to match a sequence of any character `.*` with an empty string. partempl.py "{l/.*\./}" dir/one.fastq.gz
 
@@ -243,14 +247,31 @@ This will allow `partempl.py` to return an empty string.
 
 `o` commands without pattern boundaries that are in the middle of the template block will still raise an error.
 
+### Spacing
+
+Any spacing (except newlines) outside of the pattern boundaries is ignored, so you can make things a bit more readable.
+Say I wanted to substitute `dir` with `folder`, strip `z` off of the end of the string, and convert it all to lowercase (for whatever reason).
+
+The two following commands are equivalent.
+But the first might be a bit easier to parse
+
+```
+partempl.py "{s/dir/folder/ r/z/ ^}" dir/one.fastq.gz  # FOLDER/ONE.FASTQ.G
+partempl.py "{s/dir/folder/r/z/^}" dir/one.fastq.gz  # FOLDER/ONE.FASTQ.G
+```
+
 ### alt command modes
 
-`e`, `l`, `r`, and `q` all support an uppercase variant which affects the function of the command.
+`e`, `l`, `r`, `s`, `c`, and `q` all support an uppercase variant which affects the function of the command.
 All other commands are case insensitive.
+
+We assign the lowercase variants to what we expect will be the most useful/commonly used options.
 
 - `E` strips the extension greedily. `partempl.py "{E}" dir/one.fastq.gz  # dir/one`. So while `e` removes extensions one at a time (and you can use the command multiple times), `E` just automatically removes all extensions.
 - `L` strips greedily from the left. This becomes important if using regular expressions. `partempl.py "{L/.*\./}" dir/one.fastq.gz  # gz`, compare with `partempl.py "{l/.*\./}" dir/one.fastq.gz  # fastq.gz`.
 - `R` strips greedily from the right. `partempl.py "{R/\..*/}" dir/one.fastq.gz  # dir/one`, compare with `partempl.py "{r/\..*/}" dir/one.fastq.gz  # dir/one.fastq`.
+- `S` Performs global pattern substitution. By default `s` only replaces the first match it finds. `S` replaces all matches. `partempl.py "{S/t/#####/}" dir/two.fastq.gz  # dir/#####wo.fas#####q.gz`, compare with `partempl.py "{s/[re]/#####/}" dir/two.fastq.gz  # dir/#####wo.fastq.gz`
+- `C` Only splits the string at the first occurence of the pattern, instead of at every match. `partempl.py "{c/t/}" dir/two.fastq.gz  # dir/ wo.fas q.gz`, compare with  `partempl.py "{C/t/}" dir/two.fastq.gz  # dir/ wo.fastq.gz`.
 - `Q` Uses backslash escaping instead of single quotes. Say your path had a space in it... `partempl.py "{q}" 'dir/on e.fastq.gz'  # dir/my\ data.fastq.gz` compare to `partempl.py "{q}" 'dir/on e.fastq.gz'  # 'dir/my data.fastq.gz'`.
 
 
@@ -259,7 +280,7 @@ All other commands are case insensitive.
 Some of the commands take arguments from a pair of boundary characters.
 In the above examples we've used `/` as this boundary character, as it's the standard one for regular expressions.
 But if you had to match a literal `/` in the argument, you'd have to backslash escape it. Otherwise the pattern will pick up the wrong closing boundary character.
-`partempl.py` also supports the use of characters `%&~` as boundary characters, so e.g. if you wanted to add a new directory to the filename, you could use `partempl.py "{s~dir/~nested/dirs/~}" dir/one.fastq.gz  # nested/dirs/one.fastq.gz`. No need to escape!
+`partempl.py` also supports the use of characters `|%&~` as boundary characters, so e.g. if you wanted to add a new directory to the filename, you could use `partempl.py "{s~dir/~nested/dirs/~}" dir/one.fastq.gz  # nested/dirs/one.fastq.gz`. No need to escape!
 As long as all of the boundary characters are the same, any of those characters will work.
 
 
@@ -283,7 +304,7 @@ dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz dir/four.fastq.gz
 
 - `:<int>` Indexing an array. Returns a string. `partempl.py --nparams 2 "{@:1}" dir/one.fastq.gz dir/two.fastq.gz  # dir/two.fastq.gz`
 - `:<int>:<int>` Slicing an array. Leaving one of the ints empty (e.g. `::<int>` or `:<int>:` will replace the missing value with the start or end, respectively). `partempl.py --nparams 3 "{@:0:2}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/one.fastq.gz dir/two.fastq.gz`
-- `f` Filter the array by regular expression. `partempl.py --nparams 3 "{@f/o/}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/one.fastq.gz dir/two.fastq.gz`, selects only matches containing an `o` character. Filter also supports a special match inversion flag `^` directly after `f` to return all elements that don't match the filter `partempl.py --nparams 3 "{@f/o/}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/three.fastq.gz`. Note that in this case, the returned value is still an array, but with a single element. People might be expecting `!` to negate matches, but bash treats `!` as a special character and it would be cumbersome to escape it all of the time. `^` is taken from the negation syntax in regular expression boxes e.g. `[^ab]` matches any character except `a` or `b`
+- `f` Filter the array by regular expression. `partempl.py --nparams 3 "{@f/o/}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/one.fastq.gz dir/two.fastq.gz`, selects only matches containing an `o` character. Filter also supports a special match inversion flag `-` directly after `f` to return all elements that don't match the filter `partempl.py --nparams 3 "{@f-/o/}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/three.fastq.gz`. Note that in this case, the returned value is still an array, but with a single element. People might be expecting `!` to negate matches, but bash treats `!` as a special character and it would be cumbersome to escape it all of the time.
 - `p` Returns the common prefix of all elements in the array. Returns a string. `partempl.py --nparams 3 "{@p}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/`
 - `u` Get the unique values in the array. `partempl.py --nparams 3 "{@u}" dir/one.fastq.gz dir/two.fastq.gz dir/one.fastq.gz  # dir/one.fastq.gz dir/two.fastq.gz`.
 - `j` Join the array using a string. Returns a string. `partempl.py --nparams 3 "{@j/,/}" dir/one.fastq.gz dir/two.fastq.gz dir/three.fastq.gz  # dir/one.fastq.gz,dir/two.fastq.gz,dir/three.fastq.gz`. Note that the default behaviour when returning an array is equivalend to `j/ /`.

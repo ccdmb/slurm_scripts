@@ -16,11 +16,11 @@ REGEX = re.compile(
 )
 
 PATTERN_REGEX = re.compile(
-    r"(?<!\\)(?P<sep>[/%&~])(?P<pattern>.*?)(?<!\\)(?P=sep)"
+    r"(?<!\\)(?P<sep>[/|%&~])(?P<pattern>.*?)(?<!\\)(?P=sep)"
 )
 
 PATTERN2_REGEX = re.compile(
-    r"(?<!\\)(?P<sep>[/%&~])"
+    r"(?<!\\)(?P<sep>[/|%&~])"
     r"(?P<pattern>.*?)"
     r"(?<!\\)(?P=sep)"
     r"(?P<repl>.*?)"
@@ -244,10 +244,10 @@ def parse_filter(cmd):
     flag = cmd[0]
     cmd = cmd[1:].strip()
 
-    if cmd.startswith("^"):
+    if cmd.startswith("-"):
         cmd = cmd[1:].strip()
         inverse = True
-        flag = f"{flag}^"
+        flag = f"{flag}-"
     else:
         inverse = False
 
@@ -256,7 +256,8 @@ def parse_filter(cmd):
     if filter_match is None:
         raise CMDException(
             flag,
-            f"Couldn't find filter pattern boundaries (/%&~) at left of {cmd}."
+            ("Couldn't find filter pattern boundaries "
+             f"(/|%&~) at left of {cmd}.")
         )
 
     pattern = filter_match.group("pattern")
@@ -307,7 +308,7 @@ def parse_join(cmd):
     if join_match is None:
         raise CMDException(
             flag,
-            f"Couldn't find join string boundaries (/%&~) at left of {cmd}."
+            f"Couldn't find join string boundaries (/|%&~) at left of {cmd}."
         )
 
     pattern = join_match.group("pattern")
@@ -332,7 +333,7 @@ def parse_split(cmd):
     if split_match is None:
         raise CMDException(
             flag,
-            f"Couldn't find split string boundaries (/%&~) at left of {cmd}."
+            f"Couldn't find split string boundaries (/|%&~) at left of {cmd}."
         )
 
     pattern = split_match.group("pattern")
@@ -343,11 +344,11 @@ def parse_split(cmd):
     cmd = cmd[split_match.end():]
     SUBPATTERN_REGEX = re.compile(pattern)
 
-    # Greedy split
     if flag == flag.upper():
-        maxsplit = 0
-    else:
         maxsplit = 1
+    # Greedy split
+    else:
+        maxsplit = 0
 
     def inner(s):
         return SUBPATTERN_REGEX.split(s, maxsplit=maxsplit)
@@ -394,7 +395,7 @@ def parse_strip(cmd):
     if strip_match is None:
         raise CMDException(
             flag,
-            f"Couldn't find match boundaries (/%&~) at left of {cmd}."
+            f"Couldn't find match boundaries (/|%&~) at left of {cmd}."
         )
 
     pattern = strip_match.group("pattern")
@@ -429,6 +430,11 @@ def parse_sub(cmd):
     flag = cmd[0]
     cmd = cmd[1:].strip()
 
+    if flag.upper() == flag:
+        count = 0
+    else:
+        count = 1
+
     sub_match = PATTERN2_REGEX.search(cmd)
 
     if sub_match is None:
@@ -436,7 +442,7 @@ def parse_sub(cmd):
             flag,
             (
                 "Couldn't find substitution pattern boundaries "
-                f"(/%&~) at left of {cmd}."
+                f"(/|%&~) at left of {cmd}."
             )
         )
 
@@ -451,7 +457,7 @@ def parse_sub(cmd):
     cmd = cmd[sub_match.end():]
 
     def inner(s):
-        match_ = SUBPATTERN_REGEX.sub(repl_, s)
+        match_ = SUBPATTERN_REGEX.sub(repl_, s, count=count)
         return match_
 
     return inner, cmd, True
@@ -485,7 +491,7 @@ def raise_if_empty(s):
     if isinstance(s, list) and (len(s) == 0):
         s = ""
     elif isinstance(s, list):
-        s = "".join(map(str, s))
+        s = " ".join(map(str, s))
 
     if s.strip() == "":
         raise ValueError(
@@ -495,12 +501,35 @@ def raise_if_empty(s):
         )
     return s
 
+
+def lower(s, first=False):
+    if first:
+        return s[:1].lower() + s[1:]
+    else:
+        return s.lower()
+
+
+def upper(s, first=False):
+    if first:
+        return s[:1].upper() + s[1:]
+    else:
+        return s.upper()
+
+
 def parse_cmd(cmd):  # noqa: C901
     cmd = cmd.strip()
     if TERMINAL_OR.search(cmd) is not None:
         return (lambda x: x), None, True
     elif cmd == "":
         return raise_if_empty, None, True
+    elif cmd.startswith("__"):
+        return (lambda x: lower(x, True)), cmd[2:].strip(), True
+    elif cmd.startswith("_"):
+        return (lambda x: lower(x, False)), cmd[2:].strip(), True
+    elif cmd.startswith("^^"):
+        return (lambda x: upper(x, True)), cmd[2:].strip(), True
+    elif cmd.startswith("^"):
+        return (lambda x: upper(x, False)), cmd[2:].strip(), True
     elif cmd.lower().startswith("b"):
         return basename, cmd[1:].strip(), True
     elif cmd.lower().startswith("d"):
@@ -589,7 +618,7 @@ def parse_or(cmd):
     if match_ is None:
         raise CMDException(
             flag,
-            f"Couldn't find boundaries (/%&~) at left of {cmd}."
+            f"Couldn't find boundaries (/|%&~) at left of {cmd}."
         )
 
     pattern = match_.group("pattern")
@@ -617,7 +646,7 @@ def parse_array_or(cmd):
     if match_ is None:
         raise CMDException(
             flag,
-            f"Couldn't find boundaries (/%&~) at left of {cmd}."
+            f"Couldn't find boundaries (/|%&~) at left of {cmd}."
         )
 
     pattern = match_.group("pattern")
@@ -644,15 +673,6 @@ def take_first(li):
         return li
 
 
-def clean_array(li):
-    if isinstance(li, str):
-        return li
-    elif isinstance(li, list):
-        return " ".join(map(str, li))
-    else:
-        raise ValueError("What the heck are you doing?")
-
-
 def parse_array(cmd):
     steps = []
 
@@ -670,7 +690,6 @@ def parse_array(cmd):
             steps.extend(parse_single(cmd))
             break
 
-    steps.append(clean_array)
     return steps
 
 
