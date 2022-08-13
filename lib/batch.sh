@@ -134,14 +134,32 @@ EOF
 
 
 update_dependencies() {
+    # Updates any dependencies of OLD_JOBID to instead depend on NEW_JOBID
     OLD_JOBID="${1}"
     NEW_JOBID="${2}"
 
-    TO_UPDATE=$(
-        squeue --states="PENDING,REQUEUE_FED,REQUEUE_HOLD,REQUEUED" --format "%i %E" \
-        | awk -v JID="${OLD_JOBID}" '$1 == JID {print $2}'
+    readarray -t SQUEUE < <(
+    squeue --states="PENDING,REQUEUE_FED,REQUEUE_HOLD,REQUEUED" --format "%i %E" \
+    | tail -n+2 \
+    | awk -v oldjobid="${OLD_JOBID}" -v newjobid="${NEW_JOBID}" '
+        BEGIN {OFS="\t"}
+        $2 != "(null)" && $2 ~ oldjobid {
+            s=gensub(/\([^\)]*\)/, "", "g", $2);
+            sub(oldjobid, newjobid, s);
+            print $1, s
+        }
+    '
     )
+
+    for i in "${!SQUEUE[@]}"
+    do
+        # Make sure the cut -d in 2 is a tab
+        JOBID=$(echo "${SQUEUE[${i}]}" | cut -d'	' -f1)
+        DEPS=$(echo "${SQUEUE[${i}]}" | cut -d'	' -f2-)
+        scontrol update job "${JOBID}" Dependency="${DEPS}"
+    done
 }
+
 
 source "${__SBATCH_DIRNAME}/bash_utils/import.sh" restore "${BASH_SOURCE[0]}" "${@:-}" -- "${__SBATCH_ALL[@]:-}"
 
