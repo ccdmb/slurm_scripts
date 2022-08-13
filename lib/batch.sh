@@ -9,6 +9,8 @@ __SBATCH_ALL=(
 )
 
 source "${__SBATCH_DIRNAME}/bash_utils/import.sh" save "${BASH_SOURCE[0]}" "${__SBATCH_ALL[@]:-}"
+source "${__SBATCH_DIRNAME}/bash_utils/general.sh" echo_stderr
+
 
 VALID_SBATCH_FLAGS=(
     --contiguous -h --help -H --hold --ignore-pbs -O --overcommit
@@ -49,33 +51,34 @@ gen_slurm_filename() {
 import re
 import sys
 
-def pad(var):
+
+def pad(val):
     def inner(match):
         if match.group('pad') is None:
             pad = 1
         else:
             pad = int(match.group('pad'))
-            var = int(var)
-
-        return f'{var:0>{pad}}'
+        val_ = int(val)
+        return f'{val_:0>{pad}}'
     return inner
 
-sub = sys.stdin.read()
+
+sub = sys.stdin.read().strip()
 
 if re.search(r'\\\\', sub) is not None:
     print(sub)
     sys.exit(0)
 
-sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?A', pad(${SLURM_ARRAY_JOB_ID:-ERR}), sub)
-sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?a', pad(${SLURM_ARRAY_TASK_ID:-ERR}), sub)
+sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?A', pad(${SLURM_ARRAY_JOB_ID:-1}), sub)
+sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?a', pad(${SLURM_ARRAY_TASK_ID:-2}), sub)
 sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?J', '${SLURM_JOB_ID:-ERR}.${SLURM_LOCALID:-ERR}', sub)
-sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?j', pad(${SLURM_JOB_ID:-ERR}), sub)
+sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?j', pad(${SLURM_JOB_ID:-3}), sub)
 sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?N', '${SLURMD_NODENAME:-ERR}', sub)
-sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?n', pad(${SLURM_NODEID:-ERR}), sub)
-sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?s', pad(${SLURM_LOCALID:-ERR}), sub)
-sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?t', pad(${SLURM_LOCALID:-ERR}), sub)
+sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?n', pad(${SLURM_NODEID:-4}), sub)
+sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?s', pad(${SLURM_LOCALID:-5}), sub)
+sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?t', pad(${SLURM_LOCALID:-6}), sub)
 sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?u', '${USER:-ERR}', sub)
-sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?x', '${SLURM_JOB_NAME:-ERR}', sub)
+sub = re.sub(r'(?<!%)%(?P<pad>\\d+)?x', '${SLURM_JOB_NAME:-7}', sub)
 sub = re.sub(r'%%', r'%', sub)
 print(sub)
 "
@@ -83,28 +86,30 @@ print(sub)
 
 
 write_log() {
-    TEMPLATE="${1}"
+    LOGFILE="${1}"
     JOBNAME="${2}"
     INDEX="${3}"
     EXITCODE="${4}"
-    LOCK_FD="${5:-100}"
-    JOBNAME=$(gen_slurm_filename "${TEMPLATE}")
+    CMD="${5:-}"
 
-    if [[ "${LOCK_FD}" =~ ^[0-9]+$ ]]
-    then
-        echo_stderr "The lock file descriptor was set to a non-number"
-        exit 1
-    fi
-
-    exec {LOCK_FD}> "${LOGFILE}.lock"
+    exec 100> "${LOGFILE}.lock"
     # Obtain a lock on logfile
     # This avoids multiple processes writing to the same file at once.
     # timeout if waiting for more than an hour
-    flock -x --wait 3600 ${LOCK_FD}
-    echo -e "${JOBNAME}\t${INDEX}\t${EXITCODE}" >> "${LOGFILE}"
+    flock -x --wait 3600 100
+
+    if [ -z "${CMD:-}" ]
+    then
+        CMD_PRINT=""
+    else
+        CMD_PRINT="	${CMD}"
+    fi
+
+    echo "${JOBNAME}	${INDEX}	${EXITCODE}${CMD_PRINT}" >> "${LOGFILE}"
     # Hold the lock for 10 seconds just in case the different tasks are accessing
     # different shards in the NFS. Sometimes files can take a while to become visible.
     sleep 10
+    return "${EXITCODE}"
 }
 
 

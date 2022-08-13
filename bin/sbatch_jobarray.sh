@@ -11,6 +11,7 @@ TIME="$(date +'%Y%m%d-%H:%M:%S')"
 VERSION="v0.0.1"
 DRY_RUN=false
 PACK=false
+RESUME=
 MODULES=( )
 
 INFILE=/dev/stdin
@@ -360,15 +361,118 @@ then
 fi
 
 # Reads stdin or file into an array of lines.
-readarray -t CMDS < "${INFILE}"
-if [ "${#CMDS[@]}" -eq 0 ]
+# Note that cat will remove any trailing newlines
+CMDS=$(cat "${INFILE}")
+
+# We want to fail early on empty lines or duplicate commands so that everything runs as expected
+
+# The grep removes any empty lines and lines starting with a # (comments)
+CMDS_SPACE=$(echo "${CMDS}" | grep -v '^[[:space:]]*$\|^[[:space:]]*#')
+
+if ! diff <(echo "${CMDS}") <(echo "${CMDS_SPACE}") 1>&2
 then
-    echo_sterr "ERROR: We didn't get and tasks to run!"
+    echo_stderr 'ERROR: The commands given contain an empty line or a line starting with # (a comment)'
+    echo_stderr 'ERROR: See the diff output above for locations'
     exit 1
 fi
 
-NJOBS="${#CMDS}"
+# The sort removes any duplicate commands
+CMDS_UNIQUE=$(echo "${CMDS}" | sort -u)
 
+if ! diff <(echo "${CMDS}") <(echo "${CMDS_UNIQUE}") 1>&2
+then
+    echo_stderr 'ERROR: The commands given contain duplicate commands'
+    echo_stderr 'ERROR: See the diff output above for locations'
+    exit 1
+fi
+unset CMDS_SPACE
+unset CMDS_UNIQUE
+
+NJOBS=$(echo "${CMDS}" | wc -l)
+
+if [ "${NJOBS}" -eq 0 ]
+then
+    echo_sterr "ERROR: We didnt get any tasks to run!"
+    exit 1
+fi
+
+if [ ! -z "${RESUME:-}" ]
+then
+    RESUME_CLEANED=$(cat "${RESUME}" | grep -v "^[[:space:]]*$\|^[[:space:]]*#" | sort -u)
+    MIN_NCOLS=$(echo "${RESUME_CLEANED}" | awk -F'\t' 'BEGIN {MINNF=0} {if (NR == 1) {MINNF = NF}; if ( NF > 0 ) {MINNF=(MINNF < NF ? MINNF : NF)} } END {print MINNF}')
+    RESUME="${RESUME_CLEANED}"
+    unset RESUME_CLEANED
+
+    if [ "${MIN_NCOLS}" -lt 3 ]
+    then
+        echo_stderr "ERROR: At least one entry in the file provided to --batch-resume contained ${MIN_NCOLS} columns."
+        echo_stderr "ERROR: We need at least 3 columns to figure out what to do."
+        exit 1
+    elif [ "${MIN_NCOLS}" -eq 3 ]
+    then
+        readarray -t COMPLETED_INDICES < <(echo "${RESUME}" | awk -F '\t' '$3 == 0 {print $2}' | sort)
+        readarray -t CMDS < <(echo "${CMDS}")
+
+        COMPLETED_CMDS=( )
+        for i in "${COMPLETED_INDICES[@]}"
+        do
+            if [ ${i} -lt ${NJOBS} ]
+            then
+                COMPLETED_CMDS+=( "${CMDS[${i}]}" )
+                unset CMDS[${i}]
+            fi
+        done
+
+        # This is so the indices are normal again
+        if [ "${#CMDS[@]}" -gt 0 ]
+        then
+            CMDS=( "${CMDS[@]}" )
+        fi
+
+
+        echo_stderr '######################################'
+        echo_stderr "Skipping the following commands because they were in the file provided to --batch-resume"
+        for line in "${COMPLETED_CMDS[@]}"
+        do
+            echo_stderr "COMPLETED: ${COMPLETED_CMDS}"
+        done
+
+    else
+        COMPLETED_CMDS="$(echo -e "${RESUME}" | awk -F '\t' '$3 == 0' | cut -d'	' -f4-)"
+
+        # This prints anything in CMDs that isn't in COMPLETED_CMDS
+        REMAINING_CMDS=$(grep -f <(echo "${COMPLETED_CMDS}") -F -v <(echo "${CMDS}") || : )
+
+        if [ -z "$( echo '${REMAINING_CMDS}' | sed 's/[[:space:]]//g')" ]
+        then
+            CMDS=( )
+        else
+            readarray -t CMDS < <(echo "${REMAINING_CMDS}")
+        fi
+        unset REMAINING_CMDS
+
+        COMPLETED_CMDS=$(echo "${COMPLETED_CMDS}" | awk '{print "COMPLETED: " $0}')
+        echo_stderr '######################################'
+        echo_stderr "Skipping the following commands because they were in the file provided to --batch-resume"
+        # echo stderr doesn't preserve newlines
+        echo "${COMPLETED_CMDS}" 1>&2
+        unset COMPLETED_CMDS
+    fi
+else
+    readarray -t CMDS < <(echo "${CMDS}")
+fi
+
+NJOBS="${#CMDS[@]}"
+
+if [ "${NJOBS}" -eq 0 ]
+then
+    echo_stderr "After filtering completed jobs there were no jobs left..."
+    echo_stderr "Not submitting SLURM job"
+    exit 0
+fi
+
+echo "${CMDS[@]}"
+exit 0
 
 if [ "${#MODULES[@]}" -gt 0 ]
 then
@@ -386,28 +490,59 @@ ${MODULE_CMD}
 
 JOBID="\${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
 
-read -r -d '' SRUN_SCRIPT <<EOF_SRUN  || true
+$(declare -f gen_slurm_filename)
+LOG_FILE_NAME=\$(gen_slurm_filename '${SLURM_LOG}')
+
+cleanup() {
+    EXITCODE="\$?"
+    rm -f -- \${LOG_FILE_NAME}.lock
+
+    echo -e "\n"
+    seff "\${JOBID}" | grep -v "WARNING: Efficiency statistics may be misleading for RUNNING jobs." || true
+    echo -e "\n"
+
+    if [ "\${EXITCODE}" -ne 0 ]
+    then
+        # We are putting this to stdout. stderr already has a warning from srun
+        # This points to you stderr if its in a separate file
+        echo -e "###########  ERROR!!! #############\n"
+        echo "ERROR: srun returned a non-zero status: \${EXITCODE}."
+        echo "ERROR: Please look at the error and log files to find the problem."
+    fi
+}
+
+trap cleanup EXIT
+
+read -r -d '' SRUN_SCRIPT <<'EOF_SRUN'  || true
 #!/usr/bin/env bash
+
+set -euo pipefail
 
 $(declare -a -p CMDS)
 
 INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
 
-$(declare -f gen_slurm_filename)
-
-$(declare -f write_log)
-
-trap "write_log '${SLURM_LOG}'" EXIT
-
-if [ "\${INDEX}" -gt $(( ${#CMDS} - 1 )) ]
+if [ "\${INDEX}" -gt $(( ${NJOBS} - 1 )) ]
 then
     exit 0
 fi
 
-eval "\${CMDS[\${INDEX}]}"
+# Yeah i know we are redefining this, but i dont want
+# to remove the quotes from the eof because then id have to
+# escape more.
+$(declare -f gen_slurm_filename)
+LOG_FILE_NAME=\$(gen_slurm_filename '${SLURM_LOG}')
+
+$(declare -f write_log)
+
+actually_write_log() {
+    EXITCODE="\$?"
+    write_log "\${LOG_FILE_NAME}" "\${SLURM_JOB_NAME:-\(none\)}" "\${INDEX:-0}" "\${EXITCODE}" "\${CMDS[\${INDEX}]}"
 }
 
-runner
+trap actually_write_log EXIT
+
+eval "\${CMDS[\${INDEX}]}"
 EOF_SRUN
 
 echo "\${SRUN_SCRIPT}" \
@@ -416,8 +551,6 @@ echo "\${SRUN_SCRIPT}" \
   --cpus-per-task "\${SLURM_CPUS_PER_TASK:-1}" \
   --export=all \
   bash
-
-seff "\${JOBID}" || true
 EOF
 
 if [ "${PACK}" = true ]

@@ -903,6 +903,7 @@ def main():
 
         # Replacess {{ with { etc
         cmd = re.sub(r"(?P<paren>[{}])(?P=paren)\s*", r"\g<paren>", cmd)
+        cmd = cmd.replace("\n", "; ")
         print(cmd, file=args.outfile)
     return
 
