@@ -5,27 +5,26 @@ set -euo pipefail
 SCRIPT="$(readlink -f $0)"
 DIRNAME="$(dirname ${SCRIPT})"
 SCRIPT="$(basename ${SCRIPT})"
-TIME="$(date +'%Y%m%d-%H%M%S')"
+TIME="$(date +'%Y%m%d-%H:%M:%S')"
 
 # Set defaults
 VERSION="v0.0.1"
 DRY_RUN=false
 PACK=false
 MODULES=( )
-GROUP=
-FILE=
+
+INFILE=/dev/stdin
 
 NTASKS_PER_NODE=
 NODES=
 NTASKS=
 CPUS_PER_TASK=
 
-NPARAMS=1
-
 SLURM_STDOUT_SET=false
-SLURM_STDOUT_DEFAULT="${TIME}-%A-%a.stdout"
+SLURM_STDOUT_DEFAULT="%x-%A_%4a.stdout"
 SLURM_STDERR_SET=false
-SLURM_STDERR_DEFAULT="${TIME}-%A-%a.stderr"
+SLURM_STDERR_DEFAULT="%x-%A_%4a.stderr"
+SLURM_LOG="%x-%A_%4a.log"
 SLURM_EXPORT_SET=false
 SLURM_EXPORT_DEFAULT=NONE
 SLURM_ACCOUNT_SET=false
@@ -36,8 +35,9 @@ SLURM_PARTITION_DEFAULT="work"
 # This sets -x
 DEBUG=false
 
-source "${DIRNAME}/../lib/cli.sh"
-source "${DIRNAME}/../lib/batch.sh"
+source "${DIRNAME}/../lib/bash_utils/general.sh" @
+source "${DIRNAME}/../lib/bash_utils/cli.sh" @
+source "${DIRNAME}/../lib/batch.sh" @
 
 usage() {
     echo -e "USAGE:
@@ -63,10 +63,10 @@ Parameters:
   --account=GROUP -- Which account should the slurm job be submitted under. DEFAULT: ${SLURM_ACCOUNT_DEFAULT}
   --export={[ALL,]<environment_variables>|ALL|NONE} Default ${SLURM_EXPORT_DEFAULT} as suggested by pawsey.
   --partition -- Which queue/partition should the slurm job be submitted to. DEFAULT: ${SLURM_PARTITION_DEFAULT}
-  --output -- The output filename of the job stdout. default "${TIME}-%A-%a.stdout"
-  --error -- The output filename of the job stderr. default "${TIME}-%A-%a.stderr"
+  --output -- The output filename of the job stdout. default "${SLURM_STDOUT_DEFAULT}"
+  --error -- The output filename of the job stderr. default "${SLURM_STDOUT_DEFAULT}"
+  --batch-log -- Log the job exit codes here so we can restart later. default "${SLURM_LOG}"
   --batch-pack -- Pack the job
-  --batch-nparams -- How many parameters to take for each separate job. Default: 1
   --batch-dry-run -- Print the command that will be run and exit.
   --batch-help -- Show this help and exit.
   --batch-debug -- Sets verbose logging so you can see what's being done.
@@ -182,14 +182,14 @@ do
             MODULES=( "${MODULES[@]}" "${2}" )
             shift 2
             ;;
-        --batch-group)
-            check_param "--batch-group" "${2:-}"
-            GROUP="$2"
+        --batch-log)
+            check_param "--batch-log" "${2:-}"
+            SLURM_LOG="${2}"
             shift 2
             ;;
-        --batch-file)
-            check_param "--batch-file" "${2:-}"
-            FILE="$2"
+        --batch-resume)
+            check_no_default_param "--batch-module" "${RESUME:-}" "${2:-}"
+            RESUME="${2}"
             shift 2
             ;;
         --batch-pack)
@@ -203,11 +203,6 @@ do
         --batch-debug)
             DEBUG=true
             shift # past argument
-            ;;
-        --batch-nparams)
-            check_param "--batch-nparam" "${2:-}"
-            NPARAMS="$2"
-            shift 2
             ;;
         --batch-help)
             usage
@@ -292,9 +287,6 @@ do
 
         if ! isin "${THIS_ARG}" ${VALID_SBATCH_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SBATCH_ARGS[@]}
         then
-            echo_stderr "WARNING: We encountered an unexpected argument (${THIS_ARG}) before --."
-            echo_stderr "WARNING: We'll continue as if you had used -- (it's best to explicitly provide it)."
-            echo_stderr "WARNING: No further parameters will be passed to SLURM."
             break
         fi
 
@@ -367,77 +359,63 @@ then
     fi
 fi
 
-
-if [ "${#@}" = 0 ]
+# Reads stdin or file into an array of lines.
+readarray -t CMDS < "${INFILE}"
+if [ "${#CMDS[@]}" -eq 0 ]
 then
-    echo_stderr "ERROR: You have not provided a script to run."
-    usage_err
+    echo_sterr "ERROR: We didn't get and tasks to run!"
     exit 1
 fi
 
+NJOBS="${#CMDS}"
 
-SCRIPT=$1
-shift
-POSITIONAL=( "$@" )
 
-if [ -z "${GROUP:-}" ]
+if [ "${#MODULES[@]}" -gt 0 ]
 then
-    GROUP_ARG=""
+    MODULE_CMD="module load ${MODULES[@]}"
 else
-    GROUP_ARG=" --group '${GROUP}' "
+    MODULE_CMD=""
 fi
-
-if [ -z "${FILE:-}" ]
-then
-    FILE_ARG=""
-else
-    FILE_ARG=" --file '${FILE}' "
-fi
-
-CMDS=$( "${DIRNAME}"/cmd_expansion.py ${GROUP_ARG} ${FILE_ARG} --nparams "${NPARAMS}" "${SCRIPT}" "${POSITIONAL[@]}" )
-NJOBS=$(echo "${CMDS}" | wc -l)
 
 read -r -d '' BATCH_SCRIPT <<EOF || true
 #!/bin/bash --login
 
 set -euo pipefail
 
-module load ${MODULES[@]}
+${MODULE_CMD}
 
 JOBID="\${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
 
-SRUN_SCRIPT="${TMPDIR:-.}/.tmp_${TIME}_\${JOBID}_\$\$"
-cat <<EOF_SRUN > "\${SRUN_SCRIPT}" || true
+read -r -d '' SRUN_SCRIPT <<EOF_SRUN  || true
 #!/usr/bin/env bash
 
-readarray -t CMDS <<EOF_CMDS || true
-${CMDS[@]}
-EOF_CMDS
-export CMDS
+$(declare -a -p CMDS)
 
-# Wrapping this in a function avoids some escaping hell
-runner() {
-    INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
+INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
 
-    if [ "\${INDEX}" -gt $(( ${NJOBS} - 1 )) ]
-    then
-        exit 0
-    fi
+$(declare -f gen_slurm_filename)
 
-    echo "\${CMDS[\${INDEX}]}"
+$(declare -f write_log)
+
+trap "write_log '${SLURM_LOG}'" EXIT
+
+if [ "\${INDEX}" -gt $(( ${#CMDS} - 1 )) ]
+then
+    exit 0
+fi
+
+eval "\${CMDS[\${INDEX}]}"
 }
 
-eval "\$(runner)"
+runner
 EOF_SRUN
 
-trap "rm -f -- \${SRUN_SCRIPT}" EXIT
-chmod a+x "\${SRUN_SCRIPT}"
-
-srun --nodes "\${SLURM_JOB_NUM_NODES:-1}" \
+echo "\${SRUN_SCRIPT}" \
+| srun --nodes "\${SLURM_JOB_NUM_NODES:-1}" \
   --ntasks "\${SLURM_NTASKS:-1}" \
   --cpus-per-task "\${SLURM_CPUS_PER_TASK:-1}" \
   --export=all \
-  \${SRUN_SCRIPT}
+  bash
 
 seff "\${JOBID}" || true
 EOF
@@ -460,8 +438,10 @@ fi
 
 if [ "${DRY_RUN}" = "true" ]
 then
-    echo "${BATCH_SCRIPT:-}"
-    echo "BATCH:" sbatch --array="${ARRAY_STR}" "${SLURM_ARGS[@]}"
+    echo "RUNNING AS:"
+    echo "sbatch --array='${ARRAY_STR}' ""${SLURM_ARGS[@]}"
+    echo "WITH BATCH SCRIPT:"
+    echo "${BATCH_SCRIPT}"
 else
     SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch --array="${ARRAY_STR}" "${SLURM_ARGS[@]}")
     echo ${SLURM_ID}
