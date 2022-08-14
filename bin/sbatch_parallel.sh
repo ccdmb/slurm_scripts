@@ -22,10 +22,10 @@ NTASKS=
 CPUS_PER_TASK=
 
 SLURM_STDOUT_SET=false
-SLURM_STDOUT_DEFAULT="%x-%A_%4a.stdout"
+SLURM_STDOUT_DEFAULT="%x-%j.stdout"
 SLURM_STDERR_SET=false
-SLURM_STDERR_DEFAULT="%x-%A_%4a.stderr"
-SLURM_LOG="%x-%A_%4a.log"
+SLURM_STDERR_DEFAULT="%x-%j.stderr"
+SLURM_LOG="%x-%j.log"
 SLURM_EXPORT_SET=false
 SLURM_EXPORT_DEFAULT=NONE
 SLURM_ACCOUNT_SET=false
@@ -67,7 +67,6 @@ Parameters:
   --output -- The output filename of the job stdout. default "${SLURM_STDOUT_DEFAULT}"
   --error -- The output filename of the job stderr. default "${SLURM_STDOUT_DEFAULT}"
   --batch-log -- Log the job exit codes here so we can restart later. default "${SLURM_LOG}"
-  --batch-pack -- Pack the job
   --batch-dry-run -- Print the command that will be run and exit.
   --batch-help -- Show this help and exit.
   --batch-debug -- Sets verbose logging so you can see what's being done.
@@ -77,9 +76,7 @@ See: https://slurm.schedmd.com/sbatch.html
 
 Note: you can't provide the --array flag, as this is set internally and it will raise an error.
 
-
 For more complex scripts, I'd suggest wrapping it in a separate script.
-Note that unlike GNU parallel and srun, we don't support running functions.
 "
 }
 
@@ -106,10 +103,6 @@ do
             check_no_default_param "--batch-resume" "${RESUME:-}" "${2:-}"
             RESUME="${2}"
             shift 2
-            ;;
-        --batch-pack)
-            PACK=true
-            shift
             ;;
         --batch-dry-run)
             DRY_RUN=true
@@ -234,6 +227,14 @@ then
         echo_stderr "This script requires sbatch to be available on your path."
         exit 1
     fi
+
+    # Check if we've got parallel
+    if ! which parallel > /dev/null
+    then
+        echo_stderr "This script requires GNU parallel to be available on your path."
+        exit 1
+    fi
+
 fi
 
 
@@ -258,20 +259,6 @@ fi
 if [ "${SLURM_PARTITION_SET}" = false ]
 then
     SLURM_ARGS=( "${SLURM_ARGS[@]}" "--partition" "${SLURM_PARTITION_DEFAULT}" )
-fi
-
-if [ "${PACK}" = true ] && [ -z "${NTASKS:-}" ]
-then
-    if [ ! -z "${NTASKS_PER_NODE:-}" ]
-    then
-        if [ ! -z "${NODES:-}" ]
-        then
-            NTASKS=$(( "${NTASKS_PER_NODE:-}" * "${NODES:-}" ))
-        else
-            echo_stderr "If you provide --ntasks-per-node you must also provide --nodes"
-            exit 1
-        fi
-    fi
 fi
 
 # Reads stdin or file into an array of lines.
@@ -310,86 +297,20 @@ then
     exit 1
 fi
 
-if [ ! -z "${RESUME:-}" ]
-then
-    RESUME_CLEANED=$(cat "${RESUME}" | grep -v "^[[:space:]]*$\|^[[:space:]]*#" | sort -u)
-    MIN_NCOLS=$(echo "${RESUME_CLEANED}" | awk -F'\t' 'BEGIN {MINNF=0} {if (NR == 1) {MINNF = NF}; if ( NF > 0 ) {MINNF=(MINNF < NF ? MINNF : NF)} } END {print MINNF}')
-    RESUME="${RESUME_CLEANED}"
-    unset RESUME_CLEANED
-
-    if [ "${MIN_NCOLS}" -lt 3 ]
-    then
-        echo_stderr "ERROR: At least one entry in the file provided to --batch-resume contained ${MIN_NCOLS} columns."
-        echo_stderr "ERROR: We need at least 3 columns to figure out what to do."
-        exit 1
-    elif [ "${MIN_NCOLS}" -eq 3 ]
-    then
-        readarray -t COMPLETED_INDICES < <(echo "${RESUME}" | awk -F '\t' '$3 == 0 {print $2}' | sort)
-        readarray -t CMDS < <(echo "${CMDS}")
-
-        COMPLETED_CMDS=( )
-        for i in "${COMPLETED_INDICES[@]}"
-        do
-            if [ ${i} -lt ${NJOBS} ]
-            then
-                COMPLETED_CMDS+=( "${CMDS[${i}]}" )
-                unset CMDS[${i}]
-            fi
-        done
-
-        # This is so the indices are normal again
-        if [ "${#CMDS[@]}" -gt 0 ]
-        then
-            CMDS=( "${CMDS[@]}" )
-        fi
-
-
-        echo_stderr '######################################'
-        echo_stderr "Skipping the following commands because they were in the file provided to --batch-resume"
-        for line in "${COMPLETED_CMDS[@]}"
-        do
-            echo_stderr "COMPLETED: ${COMPLETED_CMDS}"
-        done
-
-    else
-        COMPLETED_CMDS="$(echo -e "${RESUME}" | awk -F '\t' '$3 == 0' | cut -d'	' -f4-)"
-
-        # This prints anything in CMDs that isn't in COMPLETED_CMDS
-        REMAINING_CMDS=$(grep -f <(echo "${COMPLETED_CMDS}") -F -v <(echo "${CMDS}") || : )
-
-        if [ -z "$( echo '${REMAINING_CMDS}' | sed 's/[[:space:]]//g')" ]
-        then
-            CMDS=( )
-        else
-            readarray -t CMDS < <(echo "${REMAINING_CMDS}")
-        fi
-        unset REMAINING_CMDS
-
-        COMPLETED_CMDS=$(echo "${COMPLETED_CMDS}" | awk '{print "COMPLETED: " $0}')
-        echo_stderr '######################################'
-        echo_stderr "Skipping the following commands because they were in the file provided to --batch-resume"
-        # echo stderr doesn't preserve newlines
-        echo "${COMPLETED_CMDS}" 1>&2
-        unset COMPLETED_CMDS
-    fi
-else
-    readarray -t CMDS < <(echo "${CMDS}")
-fi
-
-NJOBS="${#CMDS[@]}"
-
-if [ "${NJOBS}" -eq 0 ]
-then
-    echo_stderr "After filtering completed jobs there were no jobs left..."
-    echo_stderr "Not submitting SLURM job"
-    exit 0
-fi
-
 if [ "${#MODULES[@]}" -gt 0 ]
 then
     MODULE_CMD="module load ${MODULES[@]}"
 else
     MODULE_CMD=""
+fi
+
+if [ ! -z "${RESUME:-}" ]
+then
+    RESUME_CP='cp -L '"${RESUME}"' "${LOG_FILE_NAME}"'
+    RESUME_ARG='--resume '
+else
+    RESUME_CP=
+    RESUME_ARG=
 fi
 
 read -r -d '' BATCH_SCRIPT <<EOF || true
@@ -399,14 +320,16 @@ set -euo pipefail
 
 ${MODULE_CMD}
 
-JOBID="\${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
-
 $(declare -f gen_slurm_filename)
 LOG_FILE_NAME=\$(gen_slurm_filename '${SLURM_LOG}')
 
+${RESUME_CP}
+
+export OMP_NUM_THREADS="\${SLURM_CPUS_PER_TASK:-1}"
+
 cleanup() {
     EXITCODE="\$?"
-    rm -f -- \${LOG_FILE_NAME}.lock
+    # Put any cleanup in here
 
     echo -e "\n"
     seff "\${JOBID}" | grep -v "WARNING: Efficiency statistics may be misleading for RUNNING jobs." || true
@@ -424,69 +347,20 @@ cleanup() {
 
 trap cleanup EXIT
 
-read -r -d '' SRUN_SCRIPT <<'EOF_SRUN'  || true
-#!/usr/bin/env bash
+# In this case we need to tell srun to only run 1 task since multi-tasks handled by parallel.
+SRUN="srun --nodes 1 --ntasks 1 -c\${SLURM_CPUS_PER_TASK:-1} --exact --export=all"
+PARALLEL="parallel --delay 0.5 -j \${SLURM_NTASKS:-1} --joblog '\${LOG_FILE_NAME}' ${RESUME_ARG}"
 
-set -euo pipefail
-
-$(declare -a -p CMDS)
-
-INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
-
-if [ "\${INDEX}" -gt $(( ${NJOBS} - 1 )) ]
-then
-    exit 0
-fi
-
-# Yeah i know we are redefining this, but i dont want
-# to remove the quotes from the eof because then id have to
-# escape more.
-$(declare -f gen_slurm_filename)
-LOG_FILE_NAME=\$(gen_slurm_filename '${SLURM_LOG}')
-
-$(declare -f write_log)
-
-actually_write_log() {
-    EXITCODE="\$?"
-    write_log "\${LOG_FILE_NAME}" "\${SLURM_JOB_NAME:-\(none\)}" "\${INDEX:-0}" "\${EXITCODE}" "\${CMDS[\${INDEX}]}"
-}
-
-trap actually_write_log EXIT
-
-eval "\${CMDS[\${INDEX}]}"
-EOF_SRUN
-
-echo "\${SRUN_SCRIPT}" \
-| srun --nodes "\${SLURM_JOB_NUM_NODES:-1}" \
-  --ntasks "\${SLURM_NTASKS:-1}" \
-  --cpus-per-task "\${SLURM_CPUS_PER_TASK:-1}" \
-  --export=all \
-  bash
+\${PARALLEL} "\${SRUN} {}" <<CMD_EOF
+${CMDS}
+CMD_EOF
 EOF
-
-if [ "${PACK}" = true ]
-then
-    if [ -z "${NTASKS:-}" ]
-    then
-        echo_stderr "ERROR: If you wish to use a packed job (--batch-pack), you must provide --ntasks > 1."
-        exit 1
-    elif [ "${NTASKS:-}" -le 1 ]
-    then
-        echo_stderr "ERROR: If you wish to use a packed job (--batch-pack), you must provide --ntasks > 1."
-        exit 1
-    fi
-    ARRAY_STR="0-$(( ${NJOBS} - 1 )):${NTASKS}"
-else
-    ARRAY_STR="0-$(( ${NJOBS} - 1 ))"
-fi
 
 if [ "${DRY_RUN}" = "true" ]
 then
-    echo "RUNNING AS:"
-    echo "sbatch --array='${ARRAY_STR}' ""${SLURM_ARGS[@]}"
-    echo "WITH BATCH SCRIPT:"
+    echo "RUNNING WITH BATCH SCRIPT:"
     echo "${BATCH_SCRIPT}"
 else
-    SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch --array="${ARRAY_STR}" "${SLURM_ARGS[@]}")
+    SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch "${SLURM_ARGS[@]}")
     echo ${SLURM_ID}
 fi

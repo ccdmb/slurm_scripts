@@ -1,17 +1,5 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
-
-__SBATCH_DIRNAME=$(dirname "${BASH_SOURCE[0]}")
-__SBATCH_ALL=(
-    write_log gen_slurm_filename lift_fn update_dependencies
-    VALID_SBATCH_FLAGS VALID_SBATCH_FLAGS_OPTIONAL_VALUE VALID_SBATCH_ARGS
-)
-
-source "${__SBATCH_DIRNAME}/bash_utils/import.sh" save "${BASH_SOURCE[0]}" "${__SBATCH_ALL[@]:-}"
-source "${__SBATCH_DIRNAME}/bash_utils/general.sh" echo_stderr
-
-
 VALID_SBATCH_FLAGS=(
     --contiguous -h --help -H --hold --ignore-pbs -O --overcommit
     -s --oversubscribe --parsable --spread-job -Q --quiet --reboot
@@ -159,9 +147,3 @@ update_dependencies() {
         scontrol update job "${JOBID}" Dependency="${DEPS}"
     done
 }
-
-
-source "${__SBATCH_DIRNAME}/bash_utils/import.sh" restore "${BASH_SOURCE[0]}" "${@:-}" -- "${__SBATCH_ALL[@]:-}"
-
-unset __SBATCH_DIRNAME
-unset __SBATCH_ALL
