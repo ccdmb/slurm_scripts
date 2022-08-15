@@ -391,7 +391,7 @@ trap cleanup EXIT
 SRUN="srun --nodes 1 --ntasks 1 -c\${SLURM_CPUS_PER_TASK:-1} --exact --export=all"
 PARALLEL="parallel --delay 0.5 -j \${SLURM_NTASKS:-1} --joblog \${LOG_FILE_NAME} ${RESUME_ARG}"
 
-\${PARALLEL} "\${SRUN} bash -c '{}'" <<CMD_EOF
+\${PARALLEL} "\${SRUN} bash -c {}" <<CMD_EOF
 ${CMDS}
 CMD_EOF
 EOF
