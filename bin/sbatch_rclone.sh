@@ -2,11 +2,13 @@
 
 set -euo pipefail
 
-RCLONE_MODULE="rclone/1.58.1"
+RCLONE_MODULE="${SLURM_SCRIPTS_RCLONE_MODULE:-}"
+PIGZ_MODULE="${SLURM_SCRIPTS_PIGZ_MODULE:-}"
 SCRIPT="$(readlink -f $0)"
 DIRNAME="$(dir ${SCRIPT})"
 SCRIPT="$(basename ${SCRIPT})"
 TIME="$(date +'%Y%m%d-%H%M%S')"
+PREVIEW=false
 
 # Set defaults
 VERSION="v0.0.1"
@@ -22,6 +24,8 @@ RCLONE_DEST_LOCAL=
 RCLONE_HAS_FILTERS=false
 RCLONE_TRANSFERS=12
 RCLONE_TRANSFERS_SET=false
+
+DRY_RUN=false
 
 
 # This sets -x
@@ -145,7 +149,16 @@ fi
 # Here we rely on 127 if the command isn't found.
 MODULE_RC=0
 module > /dev/null 2>&1 || MODULE_RC=$?
-if [ ${MODULE_RC} = 1 ]
+
+# 0 or 1 would be success conditions as --help returns 1
+if [ "${MODULE_RC}" -gt 1 ] && (! declare -f module > /dev/null 2>&1)
+then
+    HAVE_MODULE=1
+else
+    HAVE_MODULE=0
+fi
+
+if [ "${HAVE_MODULE}" -eq 0 ] && [ ! -z "${RCLONE_MODULE:-}" ]
 then
     module load "${RCLONE_MODULE}" | true
 fi
@@ -156,8 +169,9 @@ then
     exit 1
 fi
 
+
 # Check if we've got sbatch
-if ! which sbatch > /dev/null
+if [ "${DRY_RUN:-false}" != "true" ] && (! which sbatch > /dev/null)
 then
     echo_stderr "This script requires sbatch to be available on your path."
     exit 1
@@ -265,6 +279,24 @@ do
             PARTITION="$2"
             shift 2 # past argument
             ;;
+        --batch-rclone-module)
+            check_param "--batch-rclone-module" "${2:-}"
+            RCLONE_MODULE="$2"
+            shift 2 # past argument
+            ;;
+        --batch-pigz-module)
+            check_param "--batch-pigz-module" "${2:-}"
+            PIGZ_MODULE="$2"
+            shift 2 # past argument
+            ;;
+        --batch-preview)
+            PREVIEW=true
+            shift
+            ;;
+        --batch-dry-run)
+            DRY_RUN=true
+            shift # past argument
+            ;;
         --batch-debug)
             DEBUG=true
             shift # past argument
@@ -286,16 +318,16 @@ do
             shift # past argument
             ;;
         --help)
-	    SC="${SUBCOMMAND}"
-	    if isin "${SC}" tar gzip
-	    then
-		echo "\`${SCRIPT} ${SUBCOMMAND}\` calls \`rclone rcat\`. The documentation is provided below." 
-	        SC=rcat
-	    elif isin "${SC}" untar gunzip
-	    then
-		echo "\`${SCRIPT} ${SUBCOMMAND}\` calls \`rclone cat\`. The documentation is provided below." 
-	        SC=cat
-	    fi
+            SC="${SUBCOMMAND}"
+            if isin "${SC}" tar gzip
+            then
+                echo "\`${SCRIPT} ${SUBCOMMAND}\` calls \`rclone rcat\`. The documentation is provided below." 
+                SC=rcat
+            elif isin "${SC}" untar gunzip
+            then
+                echo "\`${SCRIPT} ${SUBCOMMAND}\` calls \`rclone cat\`. The documentation is provided below." 
+                SC=cat
+            fi
             rclone "${SC}" --help
             exit 0
             ;;
@@ -332,19 +364,43 @@ fi
 
 ### CHECK OTHER ARGS
 
-while [[ $# -gt 0 ]]
-do
-    key="$1"
-
-    case $key in
-    esac
-done
-
 
 if ! ${RCLONE_TRANSFERS_SET}
 then
     RCLONE_ARGS=( "${RCLONE_ARGS[@]}" "--transfers" "${RCLONE_TRANSFERS}" )
 fi
+
+if [ "${HAVE_MODULE}" = "true" ] && [ ! -z "${RCLONE_MODULE:-}" ]
+then
+    RCLONE_MODULE_CMD="module load ${RCLONE_MODULE}"
+else
+    RCLONE_MODULE_CMD=""
+fi
+
+if [ "${HAVE_MODULE}" = "true" ] && [ ! -z "${PIGZ_MODULE:-}" ]
+then
+    PIGZ_MODULE_CMD="module load ${PIGZ_MODULE}"
+else
+    PIGZ_MODULE_CMD=""
+fi
+
+
+if [ "${PREVIEW:-false}" = "true" ] && ( isremote "${RCLONE_SRC}" )
+then
+    if isin "${SUBCOMMAND}" copy copyto
+    then
+        rclone lsf -R "${RCLONE_ARGS[@]}" | grep -v '/$' | sort
+        exit 0
+    elif isin "${SUBCOMMAND}" untar gunzip
+        echo_stderr "ERROR: Currently we can't give previews about what files will be created for tar or gzipped files"
+        exit 1
+    fi
+elif [ "${PREVIEW:-false}" = "true" ] && ( ! isremote "${RCLONE_SRC}" )
+then
+    echo_stderr "ERROR: currently we only support previewing results from remote file download"
+    exit 1
+fi
+
 
 read -r -d '' RUN_BATCH <<EOF || true
 #!/bin/bash --login
@@ -355,7 +411,7 @@ read -r -d '' RUN_BATCH <<EOF || true
 #SBATCH --job-name="rclone_${SUBCOMMAND}_${TIME}"
 #SBATCH --export=NONE
 
-module load ${RCLONE_MODULE}
+${RCLONE_MODULE_CMD}
 
 srun rclone ${SUBCOMMAND} "${RCLONE_SRC}" "${RCLONE_DEST}" ${RCLONE_ARGS[@]} 
 EOF
@@ -369,7 +425,7 @@ read -r -d '' UNTAR_BATCH <<EOF || true
 #SBATCH --job-name="rclone_${SUBCOMMAND}_${TIME}"
 #SBATCH --export=NONE
 
-module load ${RCLONE_MODULE}
+${RCLONE_MODULE_CMD}
 
 mkdir -p "${RCLONE_DEST}"
 rclone cat "${RCLONE_SRC}" ${RCLONE_ARGS[@]} \
@@ -385,7 +441,7 @@ read -r -d '' TAR_BATCH <<EOF || true
 #SBATCH --job-name="rclone_${SUBCOMMAND}_${TIME}"
 #SBATCH --export=NONE
 
-module load ${RCLONE_MODULE}
+${RCLONE_MODULE_CMD}
 
 cd "${RCLONE_SRC}"
 tar cf - . --use-compress-program="pigz" \
@@ -401,7 +457,8 @@ read -r -d '' GUNZIP_BATCH <<EOF || true
 #SBATCH --job-name="rclone_${SUBCOMMAND}_${TIME}"
 #SBATCH --export=NONE
 
-module load ${RCLONE_MODULE}
+${RCLONE_MODULE_CMD}
+${PIGZ_MODULE_CMD}
 
 rclone cat "${RCLONE_SRC}" ${RCLONE_ARGS[@]} \
 | pigz -d - \
@@ -417,7 +474,8 @@ read -r -d '' GZIP_BATCH <<EOF || true
 #SBATCH --job-name="rclone_${SUBCOMMAND}_${TIME}"
 #SBATCH --export=NONE
 
-module load ${RCLONE_MODULE}
+${RCLONE_MODULE_CMD}
+${PIGZ_MODULE_CMD}
 
 pigz -6 --to-stdout --rsyncable "${RCLONE_SRC}" \
 | rclone rcat ${RCLONE_DEST} ${RCLONE_ARGS[@]}
@@ -445,6 +503,13 @@ case ${SUBCOMMAND} in
         exit 1
 esac
 
-SLURM_ID=$(echo "${BATCH}" | sbatch --parsable)
 
-echo "${SLURM_ID}"
+if [ "${DRY_RUN:-false}" = "true" ]
+then
+    echo "--batch-dry-run specified so not submitting job script.
+    echo -e "Would run batch script:\n"
+    echo "${BATCH}"
+else
+    SLURM_ID=$(echo "${BATCH}" | sbatch --parsable)
+    echo "${SLURM_ID}"
+fi
