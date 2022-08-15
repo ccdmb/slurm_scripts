@@ -231,6 +231,23 @@ then
     set -x
 fi
 
+### Prepare software
+
+# Attempts to load the module, but it's ok if not
+# Module is a bit weird, it doesn't seem to exist on PATH.
+# And it returns 1 with help.
+# Here we rely on 127 if the command isn't found.
+MODULE_RC=0
+module > /dev/null 2>&1 || MODULE_RC=$?
+
+# 0 or 1 would be success conditions as --help returns 1
+if [ "${MODULE_RC}" -gt 1 ] && (! declare -f module > /dev/null 2>&1)
+then
+    HAVE_MODULE=false
+else
+    HAVE_MODULE=true
+fi
+
 if [ "${HAVE_MODULE}" = "true" ] && [ ! -z "${PARALLEL_MODULE:-}" ]
 then
     module load "${PARALLEL_MODULE}"
@@ -355,7 +372,7 @@ cleanup() {
     # Put any cleanup in here
 
     echo -e "\n"
-    seff "\${JOBID}" | grep -v "WARNING: Efficiency statistics may be misleading for RUNNING jobs." || true
+    seff "\${SLURM_JOBID}" | grep -v "WARNING: Efficiency statistics may be misleading for RUNNING jobs." || true
     echo -e "\n"
 
     if [ "\${EXITCODE}" -ne 0 ]

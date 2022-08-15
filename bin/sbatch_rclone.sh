@@ -303,12 +303,12 @@ do
             ;;
         --filter|--include|--exclude)
             RCLONE_HAS_FILTERS=true
-            RCLONE_ARGS=( "${RCLONE_ARGS[@]}" "$1" "$2")
+            RCLONE_ARGS=( "${RCLONE_ARGS[@]}" "$1" "$2" )
             shift 2 # past argument
             ;;
         --transfers)
             RCLONE_TRANSFERS_SET=true
-            RCLONE_ARGS=( "${RCLONE_ARGS[@]}" "$1" "$2")
+            RCLONE_ARGS=( "${RCLONE_ARGS[@]}" "$1" "$2" )
             shift 2 # past argument
             ;;
         --interactive)
@@ -385,13 +385,33 @@ else
     PIGZ_MODULE_CMD=""
 fi
 
-
 if [ "${PREVIEW:-false}" = "true" ] && ( isremote "${RCLONE_SRC}" )
 then
-    if isin "${SUBCOMMAND}" copy copyto
+    if [ "${SUBCOMMAND}" = copy ]
     then
-        rclone lsf -R "${RCLONE_ARGS[@]}" "${RCLONE_SRC}"  | grep -v '/$' | sort
+        FILES=$(rclone lsf -R --files-only "${RCLONE_ARGS[@]}" "${RCLONE_SRC}" | sort)
+        FILES=$(echo "${FILES}" | awk -v dest="${RCLONE_DEST%%/}" '{printf "%s/%s\n", dest, $0}')
+        echo "${FILES}"
         exit 0
+
+    elif [ "${SUBCOMMAND}" = copyto ]
+    then
+        FILES=$(rclone lsf -R --files-only "${RCLONE_ARGS[@]}" "${RCLONE_SRC}" | sort)
+        if [ $(echo "${FILES}" | wc -l) -eq 1 ]
+        then
+            if [[ "${RCLONE_DEST}" =~ *"/" ]]
+            then
+                echo_stderr "ERROR: When using copyto and youre copying one file the destination cant be a directory."
+                exit 1
+            fi
+            echo "${RCLONE_DEST}"
+        else
+            FILES=$(echo "${FILES}" | awk -v dest="${RCLONE_DEST%%/}" '{printf "%s/%s\n", dest, $0}')
+            echo "${FILES}"
+        fi
+
+        exit 0
+
     elif isin "${SUBCOMMAND}" untar gunzip
     then
         echo_stderr "ERROR: Currently we cant give previews about what files will be created for tar or gzipped files"
@@ -402,7 +422,6 @@ then
     echo_stderr "ERROR: currently we only support previewing results from remote file download"
     exit 1
 fi
-
 
 read -r -d '' RUN_BATCH <<EOF || true
 #!/bin/bash --login
