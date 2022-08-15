@@ -32,6 +32,8 @@ SLURM_ACCOUNT_SET=false
 SLURM_ACCOUNT_DEFAULT="${PAWSEY_PROJECT:-UNSET}"
 SLURM_PARTITION_SET=false
 SLURM_PARTITION_DEFAULT="work"
+SLURM_JOB_NAME_SET=false
+SLURM_JOB_NAME_DEFAULT=$(basename "${SCRIPT%%.*}")
 
 # This sets -x
 DEBUG=false
@@ -198,6 +200,9 @@ do
             -c|--cpus-per-task)
                 CPUS_PER_TASK="${NEXT_ARG}"
                 ;;
+            -J|--job-name)
+                SLURM_JOB_NAME_SET=true
+                ;;
         esac
 
         if ! isin "${THIS_ARG}" ${VALID_SBATCH_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SBATCH_ARGS[@]}
@@ -260,6 +265,11 @@ then
     SLURM_ARGS=( "${SLURM_ARGS[@]}" "--partition" "${SLURM_PARTITION_DEFAULT}" )
 fi
 
+if [ "${SLURM_JOB_NAME_SET}" = false ]
+then
+    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--job-name" "${SLURM_JOB_NAME_DEFAULT}" )
+fi
+
 if [ "${PACK}" = true ] && [ -z "${NTASKS:-}" ]
 then
     if [ ! -z "${NTASKS_PER_NODE:-}" ]
@@ -276,12 +286,12 @@ fi
 
 # Reads stdin or file into an array of lines.
 # Note that cat will remove any trailing newlines
-CMDS=$(cat "${INFILE}")
+CMDS=$(cat "${INFILE}" | sort)
 
 # We want to fail early on empty lines or duplicate commands so that everything runs as expected
 
 # The grep removes any empty lines and lines starting with a # (comments)
-CMDS_SPACE=$(echo "${CMDS}" | grep -v '^[[:space:]]*$\|^[[:space:]]*#')
+CMDS_SPACE=$(echo "${CMDS}" | grep -v '^[[:space:]]*$\|^[[:space:]]*#' | sort)
 
 if ! diff <(echo "${CMDS}") <(echo "${CMDS_SPACE}") 1>&2
 then
