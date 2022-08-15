@@ -804,11 +804,11 @@ def get_index(njobs: int, p: int, i: int) -> int:
 
 def get_args(args: "list[str]", nparams: int):
     if len(args) == 0:
-        raise ValueError("You haven't provided and files to operate on")
+        raise ValueError("ERROR: You haven't provided any files to operate on.")
 
     if (len(args) % nparams) != 0:
         raise ValueError(
-            "The number of files specified by your glob is not a "
+            "ERROR: The number of files specified by your glob is not a "
             "multiple of your nparams."
         )
 
@@ -839,7 +839,7 @@ def get_args_from_file(handle, nparams: "Optional[int]"):
 
         if (nparams is not None) and (len(line) != nparams):
             raise ValueError(
-                f"The file doesn't have the specified number "
+                f"ERROR: The file doesn't have the specified number "
                 f"of parameters ({nparams}) on line {i}."
             )
 
@@ -875,14 +875,24 @@ def get_groups(command, nparams, lines):
 def main():
     args = cli(prog=sys.argv[0], args=sys.argv[1:])
     if args.file is not None:
-        lines = get_args_from_file(args.file, args.nparams)
+        try:
+            lines = get_args_from_file(args.file, args.nparams)
+        except ValueError as e:
+            print(e)
+            sys.exit(1)
+
         nparams = len(lines[0])
     else:
         if args.nparams is None:
             nparams = 1
         else:
             nparams = args.nparams
-        lines = get_args(args.glob, nparams)
+
+        try:
+            lines = get_args(args.glob, nparams)
+        except ValueError as e:
+            print(e)
+            sys.exit(1)
 
     if args.group is not None:
         groups = get_groups(args.group, nparams, lines)

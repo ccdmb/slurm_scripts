@@ -32,6 +32,10 @@ SLURM_ACCOUNT_SET=false
 SLURM_ACCOUNT_DEFAULT="${PAWSEY_PROJECT:-UNSET}"
 SLURM_PARTITION_SET=false
 SLURM_PARTITION_DEFAULT="work"
+SLURM_JOB_NAME_SET=false
+SLURM_JOB_NAME_DEFAULT=$(basename "${SCRIPT%%.*}")
+
+PARALLEL_MODULE="${SLURM_SCRIPTS_RCLONE_MODULE:-}"
 
 # This sets -x
 DEBUG=false
@@ -121,6 +125,11 @@ do
             echo "${VERSION}"
             exit 0
             ;;
+        --batch-parallel-module)
+            check_param "--batch-parallel-module" "${2:-}"
+            PARALLEL_MODULE="$2"
+            shift 2 # past argument
+            ;;
         -a|--array|-a=*|--array=*)
             echo_stderr "ERROR: We handle the --array parameter ourselves, you cant set it"
             echo_stderr "ERROR: Remove the \`--array\` parameter."
@@ -191,6 +200,9 @@ do
             -c|--cpus-per-task)
                 CPUS_PER_TASK="${NEXT_ARG}"
                 ;;
+            -J|--job-name)
+                SLURM_JOB_NAME_SET=true
+                ;;
         esac
 
         if ! isin "${THIS_ARG}" ${VALID_SBATCH_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SBATCH_ARGS[@]}
@@ -217,6 +229,29 @@ done
 if [ "${DEBUG:-}" = "true" ]
 then
     set -x
+fi
+
+### Prepare software
+
+# Attempts to load the module, but it's ok if not
+# Module is a bit weird, it doesn't seem to exist on PATH.
+# And it returns 1 with help.
+# Here we rely on 127 if the command isn't found.
+MODULE_RC=0
+module > /dev/null 2>&1 || MODULE_RC=$?
+
+# 0 or 1 would be success conditions as --help returns 1
+if [ "${MODULE_RC}" -gt 1 ] && (! declare -f module > /dev/null 2>&1)
+then
+    HAVE_MODULE=false
+else
+    HAVE_MODULE=true
+fi
+
+if [ "${HAVE_MODULE}" = "true" ] && [ ! -z "${PARALLEL_MODULE:-}" ]
+then
+    module load "${PARALLEL_MODULE}"
+    MODULES+=( "${PARALLEL_MODULE}" )
 fi
 
 if [ "${DRY_RUN}" = "false" ]
@@ -261,9 +296,14 @@ then
     SLURM_ARGS=( "${SLURM_ARGS[@]}" "--partition" "${SLURM_PARTITION_DEFAULT}" )
 fi
 
+if [ "${SLURM_JOB_NAME_SET}" = false ]
+then
+    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--job-name" "${SLURM_JOB_NAME_DEFAULT}" )
+fi
+
 # Reads stdin or file into an array of lines.
 # Note that cat will remove any trailing newlines
-CMDS=$(cat "${INFILE}")
+CMDS=$(cat "${INFILE}" | sort)
 
 # We want to fail early on empty lines or duplicate commands so that everything runs as expected
 
@@ -280,7 +320,7 @@ fi
 # The sort removes any duplicate commands
 CMDS_UNIQUE=$(echo "${CMDS}" | sort -u)
 
-if ! diff <(echo "${CMDS}") <(echo "${CMDS_UNIQUE}") 1>&2
+if ! diff <(echo "${CMDS}" | sort) <(echo "${CMDS_UNIQUE}") 1>&2
 then
     echo_stderr 'ERROR: The commands given contain duplicate commands'
     echo_stderr 'ERROR: See the diff output above for locations'
@@ -332,7 +372,7 @@ cleanup() {
     # Put any cleanup in here
 
     echo -e "\n"
-    seff "\${JOBID}" | grep -v "WARNING: Efficiency statistics may be misleading for RUNNING jobs." || true
+    seff "\${SLURM_JOBID}" | grep -v "WARNING: Efficiency statistics may be misleading for RUNNING jobs." || true
     echo -e "\n"
 
     if [ "\${EXITCODE}" -ne 0 ]
@@ -349,9 +389,9 @@ trap cleanup EXIT
 
 # In this case we need to tell srun to only run 1 task since multi-tasks handled by parallel.
 SRUN="srun --nodes 1 --ntasks 1 -c\${SLURM_CPUS_PER_TASK:-1} --exact --export=all"
-PARALLEL="parallel --delay 0.5 -j \${SLURM_NTASKS:-1} --joblog '\${LOG_FILE_NAME}' ${RESUME_ARG}"
+PARALLEL="parallel --delay 0.5 -j \${SLURM_NTASKS:-1} --joblog \${LOG_FILE_NAME} ${RESUME_ARG}"
 
-\${PARALLEL} "\${SRUN} {}" <<CMD_EOF
+\${PARALLEL} "\${SRUN} bash -c {}" <<CMD_EOF
 ${CMDS}
 CMD_EOF
 EOF
