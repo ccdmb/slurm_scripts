@@ -35,7 +35,7 @@ SLURM_PARTITION_DEFAULT="work"
 SLURM_JOB_NAME_SET=false
 SLURM_JOB_NAME_DEFAULT=$(basename "${SCRIPT%%.*}")
 
-PARALLEL_MODULE="${SLURM_SCRIPTS_RCLONE_MODULE:-}"
+PARALLEL_MODULE="${SLURM_SCRIPTS_PARALLEL_MODULE:-}"
 
 # This sets -x
 DEBUG=false
@@ -71,14 +71,18 @@ Parameters:
   --output -- The output filename of the job stdout. default "${SLURM_STDOUT_DEFAULT}"
   --error -- The output filename of the job stderr. default "${SLURM_STDOUT_DEFAULT}"
   --batch-log -- Log the job exit codes here so we can restart later. default "${SLURM_LOG}"
+  --batch-resume -- Resume the jobarray, skipping previously successful jobs according to the file provided here.
   --batch-dry-run -- Print the command that will be run and exit.
+  --batch-module -- Include this module the sbatch script. Can be specified multiple times.
+  --batch-parallel-module -- Module needed to load GNU parallel. Takes a default argument from environment variable SLURM_SCRIPTS_PARALLEL_MODULE. If that is empty, assumes that parallel is already on your PATH.
   --batch-help -- Show this help and exit.
   --batch-debug -- Sets verbose logging so you can see what's being done.
+  --batch-version -- Print the version and exit.
 
 All other parameters, flags and arguments before '--' are passed to sbatch as is.
 See: https://slurm.schedmd.com/sbatch.html
 
-Note: you can't provide the --array flag, as this is set internally and it will raise an error.
+Note: you can't provide the --array flag, as parallelism is handled a different way and it will raise an error.
 
 For more complex scripts, I'd suggest wrapping it in a separate script.
 "
@@ -131,8 +135,8 @@ do
             shift 2 # past argument
             ;;
         -a|--array|-a=*|--array=*)
-            echo_stderr "ERROR: We handle the --array parameter ourselves, you cant set it"
-            echo_stderr "ERROR: Remove the \`--array\` parameter."
+            echo_stderr "ERROR: This script cannot be used alongside job-array execution."
+            echo_stderr "ERROR: Remove the \`--array\` parameter or try the sbatch_jobarray.sh command."
             exit 1
             ;;
         --ntasks-per-core*|--ntasks-per-gpu*|--ntasks-per-socket*)
@@ -353,6 +357,8 @@ else
     RESUME_ARG=
 fi
 
+SBATCH_DIRECTIVES=$(printf "#SBATCH ")
+
 read -r -d '' BATCH_SCRIPT <<EOF || true
 #!/bin/bash --login
 
@@ -383,6 +389,8 @@ cleanup() {
         echo "ERROR: srun returned a non-zero status: \${EXITCODE}."
         echo "ERROR: Please look at the error and log files to find the problem."
     fi
+
+    return "\${EXITCODE}"
 }
 
 trap cleanup EXIT
@@ -398,7 +406,6 @@ EOF
 
 if [ "${DRY_RUN}" = "true" ]
 then
-    echo "RUNNING WITH BATCH SCRIPT:"
     echo "${BATCH_SCRIPT}"
 else
     SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch "${SLURM_ARGS[@]}")

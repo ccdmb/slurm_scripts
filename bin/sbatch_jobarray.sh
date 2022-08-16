@@ -57,8 +57,7 @@ Run \`${SCRIPT} --batch-help\` for extended usage information."
 
 help() {
     echo -e "
-This script wraps SLURM job-arrays up in a more convenient way to perform embarassing parallelism from a glob of files.
-All
+This script wraps SLURM job-arrays up in a more convenient script to run a series of commands.
 
 It requires SLURM installed in your environment.
 
@@ -69,10 +68,13 @@ Parameters:
   --output -- The output filename of the job stdout. default "${SLURM_STDOUT_DEFAULT}"
   --error -- The output filename of the job stderr. default "${SLURM_STDOUT_DEFAULT}"
   --batch-log -- Log the job exit codes here so we can restart later. default "${SLURM_LOG}"
-  --batch-pack -- Pack the job
+  --batch-resume -- Resume the jobarray, skipping previously successful jobs according to the file provided here. <(cat *.log) is handy here.
+  --batch-pack -- Pack the job so that multiple tasks run per job array job. Uses the value of --ntasks to determine how many to run per job.
   --batch-dry-run -- Print the command that will be run and exit.
+  --batch-module -- Include this module the sbatch script. Can be specified multiple times.
   --batch-help -- Show this help and exit.
   --batch-debug -- Sets verbose logging so you can see what's being done.
+  --batch-version -- Print the version and exit.
 
 All other parameters, flags and arguments before '--' are passed to sbatch as is.
 See: https://slurm.schedmd.com/sbatch.html
@@ -96,7 +98,7 @@ do
     case $key in
         --batch-module)
             check_param "--batch-module" "${2:-}"
-            MODULES=( "${MODULES[@]}" "${2}" )
+            MODULES+=( "${2}" )
             shift 2
             ;;
         --batch-log)
