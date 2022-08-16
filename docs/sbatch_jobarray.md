@@ -1,13 +1,16 @@
 # Wrap tasks into SLURM job arrays.
 
 `sbatch_jobarray.sh` is a wrapper around SLURM job arrays that can automatically determine how to submit a task to the queue correctly.
-It will automatically determine how many array jobs to run, it can optionally pack multiple tasks into a single job array run, and is designed to run with `cmd_expansion.py`.
+It will automatically determine how many array jobs to run, it can optionally pack multiple tasks into a single job array run, and is designed to run with [`pt`](./pt.md).
+
+This strategy is good for running a lot of high-resource tasks. E.g. long jobs (say >= 3 hours) and/or a large compute allocation (say > 16 CPUs or >32GB RAM).
+Unfortunately, there is a limit on how many tasks you can submit with a job-array. On pawsey you can submit up to 300 at once (last time I checked). If you have lots of small jobs, [`sbatch_parallel.sh`](./sbatch_parallel.md) might be appropriate for you.
 
 ## Instructions
 
 This program takes commands in from stdin or a file and submits each line as a separate task.
 It automatically generates an appropriate job-array batch script from these inputs, and can also pack tasks within job-array tasks for larger jobs where shared node access isn't available.
-This program also provides options for loggin job exit codes, which can be used to resume the job and skip and previously successfully completed tasks.
+This program also provides options for logging job exit codes, which can be used to resume the job and skip and previously successfully completed tasks.
 
 The basic design is fairly simple and for the most part the command line arguments are passed directly to sbatch.
 
@@ -47,3 +50,36 @@ pt --nparams 'map.sh --in2 {0} --in2 {1}' *-{R1,R2}.fastq.gz | sbatch_jobarray.s
 ```
 
 When you run the job for real (without `--batch-dry-run`), the program will just echo the created SLURM job id, which you can use for job dependencies.
+
+
+### Command line arguments
+
+```
+This script wraps SLURM job-arrays up in a more convenient script to run a series of commands.
+
+It requires SLURM installed in your environment.
+
+Parameters:
+  --account=GROUP -- Which account should the slurm job be submitted under. DEFAULT: ${PAWSEY_PROJECT}
+  --export={[ALL,]<environment_variables>|ALL|NONE} Default ${SLURM_EXPORT_DEFAULT} as suggested by pawsey.
+  --partition -- Which queue/partition should the slurm job be submitted to. DEFAULT: work
+  --output -- The output filename of the job stdout. default "%x-%A_%4a.stdout"
+  --error -- The output filename of the job stderr. default "%x-%A_%4a.stderr"
+  --batch-log -- Log the job exit codes here so we can restart later. default "%x-%A_%4a.log"
+  --batch-resume -- Resume the jobarray, skipping previously successful jobs according to the file provided here. <(cat *.log) is handy here.
+  --batch-pack -- Pack the job so that multiple tasks run per job array job. Uses the value of --ntasks to determine how many to run per job.
+  --batch-dry-run -- Print the command that will be run and exit.
+  --batch-module -- Include this module the sbatch script. Can be specified multiple times.
+  --batch-help -- Show this help and exit.
+  --batch-debug -- Sets verbose logging so you can see what's being done.
+  --batch-version -- Print the version and exit.
+
+All other parameters, flags and arguments are passed to sbatch as is.
+See: https://slurm.schedmd.com/sbatch.html
+
+Note: you can't provide the --array flag, as this is set internally and it will raise an error.
+
+
+For more complex scripts, I'd suggest wrapping it in a separate script.
+Note that unlike GNU parallel and srun, we don't support running functions.
+```
