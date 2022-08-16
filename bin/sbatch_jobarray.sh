@@ -433,18 +433,11 @@ cleanup()
 
 trap cleanup EXIT
 
-readarray -t CMDS <<'CMD_EOF' || true
-${CMDS}
-CMD_EOF
-export CMDS
-
 # srun will inherit the resource directives from parent batch script.
 srun --export=all bash -s "\${LOG_FILE_NAME}" <<'EOF_SRUN'
 #!/usr/bin/env bash
 
 set -euo pipefail
-
-LOG_FILE_NAME="\${1}"
 
 INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
 
@@ -452,6 +445,14 @@ if [ "\${INDEX}" -gt $(( ${NJOBS} - 1 )) ]
 then
     exit 0
 fi
+
+readarray -t CMDS <<'CMD_EOF' || true
+${CMDS}
+CMD_EOF
+
+CMD="\${CMDS[\${INDEX}]}"
+
+LOG_FILE_NAME="\${1}"
 
 $(declare -f write_log)
 
@@ -464,7 +465,7 @@ actually_write_log()
 
 trap actually_write_log EXIT
 
-eval "\${CMDS[\${INDEX}]}"
+eval "\${CMD}"
 EOF_SRUN
 EOF
 

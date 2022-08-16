@@ -358,7 +358,7 @@ fi
 if [ ! -z "${RESUME:-}" ]
 then
     RESUME_CP='cp -L '"${RESUME}"' "${LOG_FILE_NAME}"'
-    RESUME_ARG='--resume '
+    RESUME_ARG='--resume-failed '
 else
     RESUME_CP=
     RESUME_ARG=
@@ -405,7 +405,7 @@ cleanup()
 trap cleanup EXIT
 
 # In this case we need to tell srun to only run 1 task since multi-tasks handled by parallel.
-SRUN="srun --nodes 1 --ntasks 1 -c\${SLURM_CPUS_PER_TASK:-1} --exact --export=all"
+SRUN="srun --nodes 1 --ntasks 1 --cpus-per-task \${SLURM_CPUS_PER_TASK:-1} --exact --export=all"
 PARALLEL="parallel --delay 0.5 -j \${SLURM_NTASKS:-1} --joblog \${LOG_FILE_NAME} ${RESUME_ARG}"
 
 \${PARALLEL} "\${SRUN} bash -c {}" <<'CMD_EOF'
