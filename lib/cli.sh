@@ -19,7 +19,7 @@ split_at_equals() {
     IFS="=" FLAG=( ${1} )
     ONE="${FLAG[0]}"
     TWO=$(printf "=%s" "${FLAG[@]:1}")
-    IFS="=" echo "${ONE}" "${TWO:1}"
+    echo "${ONE}" "${TWO:1}"
 }
 
 check_no_default_param() {

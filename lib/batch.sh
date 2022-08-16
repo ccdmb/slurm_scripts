@@ -31,6 +31,95 @@ VALID_SBATCH_ARGS=(
     --gpus-per-task --mem-per-gpu
 )
 
+
+promote_sbatch_arg() {
+    ARG="${1}"
+    case "${ARG}" in
+        -a)
+            echo "--array"
+            ;;
+        -A)
+            echo "--account"
+            ;;
+        -b)
+            echo "--begin"
+            ;;
+        -c)
+            echo "--cpus-per-task"
+            ;;
+        -d)
+            echo "--dependency"
+            ;;
+        -D)
+            echo "--chdir"
+            ;;
+        -e)
+            echo "--error"
+            ;;
+        -i)
+            echo "--input"
+            ;;
+        -J)
+            echo "--job-name"
+            ;;
+        -L)
+            echo "--licenses"
+            ;;
+        -M)
+            echo "--clusters"
+            ;;
+        -m)
+            echo "--distribution"
+            ;;
+        -n)
+            echo "--ntasks"
+            ;;
+        -N)
+            echo "--nodes"
+            ;;
+        -o)
+            echo "--output"
+            ;;
+        -p)
+            echo "--partition"
+            ;;
+        -q)
+            echo "--qos"
+            ;;
+        -S)
+            echo "--core-spec"
+            ;;
+        -t)
+            echo "--time"
+            ;;
+        -C)
+            echo "--constraint"
+            ;;
+        -F)
+            echo "--nodefile"
+            ;;
+        -w)
+            echo "--nodelist"
+            ;;
+        -x)
+            echo "--exclude"
+            ;;
+        -B)
+            echo "--extra-node-info"
+            ;;
+        -G)
+            echo "--gpus"
+            ;;
+        -k)
+            echo "--no-kill"
+            ;;
+        *)
+            echo "${ARG}"
+            ;;
+    esac
+}
+
+
 gen_slurm_filename() {
     TEMPLATE="$1"
 
@@ -94,9 +183,10 @@ write_log() {
     fi
 
     echo "${JOBNAME}	${INDEX}	${EXITCODE}${CMD_PRINT}" >> "${LOGFILE}"
-    # Hold the lock for 10 seconds just in case the different tasks are accessing
+    # Hold the lock for 5 seconds just in case the different tasks are accessing
     # different shards in the NFS. Sometimes files can take a while to become visible.
-    sleep 10
+    # Probably it should be longer but i'm impatient
+    sleep 5
     return "${EXITCODE}"
 }
 
