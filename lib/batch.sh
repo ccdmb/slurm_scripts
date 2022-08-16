@@ -183,9 +183,10 @@ write_log() {
     fi
 
     echo "${JOBNAME}	${INDEX}	${EXITCODE}${CMD_PRINT}" >> "${LOGFILE}"
-    # Hold the lock for 10 seconds just in case the different tasks are accessing
+    # Hold the lock for 5 seconds just in case the different tasks are accessing
     # different shards in the NFS. Sometimes files can take a while to become visible.
-    sleep 10
+    # Probably it should be longer but i'm impatient
+    sleep 5
     return "${EXITCODE}"
 }
 

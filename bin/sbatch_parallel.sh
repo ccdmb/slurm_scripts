@@ -89,7 +89,7 @@ For more complex scripts, I'd suggest wrapping it in a separate script.
 }
 
 
-SLURM_ARGS=( --parsable )
+SLURM_ARGS=( )
 
 # Here we catch our special parameters and collect the rclone ones
 while [[ $# -gt 0 ]]
@@ -155,25 +155,41 @@ do
         *)
         if isin "$1" "${VALID_SBATCH_FLAGS[@]}"
         then
-            SLURM_ARGS=( "${SLURM_ARGS[@]}" "$1")
+            SLURM_ARGS+=( "$1" )
             shift
             continue
         fi
 
-        THIS_ARG=( $(split_at_equals "$1") )
+        THIS_ARG="${1}"
+        NEXT_ARG="${THIS_ARG#*=}"
+        THIS_ARG="${THIS_ARG%%=*}"
 
-        if [ ${#THIS_ARG[@]} = 2 ]
+        if [ "${THIS_ARG}" != "${NEXT_ARG}" ]
         then
-            NEXT_ARG="${THIS_ARG[1]}"
-            THIS_ARG="${THIS_ARG[0]}"
+            # This means there was an = sign
             SKIP=1
-        elif [[ ! "${2:-}" == "-"* ]]
+        elif [[ ! "${2:-}" = "-"* ]]
         then
             NEXT_ARG="${2:-}"
             SKIP=2
         else
             NEXT_ARG=""
             SKIP=1
+        fi
+
+        # Having -n in an array causes issues for some reason
+        THIS_ARG=$(promote_sbatch_arg "${THIS_ARG}")
+
+        if ! isin "${THIS_ARG}" ${VALID_SBATCH_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SBATCH_ARGS[@]}
+        then
+            echo_stderr "ERROR: Got an invalid parameter ${1}"
+            exit 1
+        fi
+
+        if ( isin "${THIS_ARG}" "${VALID_SBATCH_ARGS[@]}" ) && [ -z "${NEXT_ARG:-}" ]
+        then
+            echo_stderr "ERROR: ${THIS_ARG} expects a value."
+            exit 1
         fi
 
         case "${THIS_ARG}" in
@@ -209,20 +225,11 @@ do
                 ;;
         esac
 
-        if ! isin "${THIS_ARG}" ${VALID_SBATCH_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SBATCH_ARGS[@]}
+        if [ ! -z "${NEXT_ARG:-}" ]
         then
-            break
-        fi
-
-        SLURM_ARGS=( "${SLURM_ARGS[@]}" "${THIS_ARG}" )
-
-        if ( isin "${THIS_ARG}" "${VALID_SBATCH_ARGS[@]}" ) && [ -z "${NEXT_ARG:-}" ]
-        then
-            echo_stderr "ERROR: ${THIS_ARG} expects a value."
-            exit 1
-        elif [ ! -z "${NEXT_ARG:-}" ]
-        then
-            SLURM_ARGS=( "${SLURM_ARGS[@]}" "${NEXT_ARG:-}" )
+            SLURM_ARGS+=( "${THIS_ARG}=${NEXT_ARG}" )
+        else
+            SLURM_ARGS+=( "${THIS_ARG}" )
         fi
 
         shift "${SKIP}"
@@ -281,28 +288,28 @@ fi
 
 if [ "${SLURM_STDOUT_SET}" = false ] && [ "${SLURM_STDERR_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--output" "${SLURM_STDOUT_DEFAULT}" )
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--error" "${SLURM_STDERR_DEFAULT}" )
+    SLURM_ARGS+=( "--output=${SLURM_STDOUT_DEFAULT}" )
+    SLURM_ARGS+=( "--error=${SLURM_STDERR_DEFAULT}" )
 fi
 
 if [ "${SLURM_EXPORT_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--export" "${SLURM_EXPORT_DEFAULT}" )
+    SLURM_ARGS+=( "--export=${SLURM_EXPORT_DEFAULT}" )
 fi
 
 if [ "${SLURM_ACCOUNT_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--account" "${SLURM_ACCOUNT_DEFAULT}" )
+    SLURM_ARGS+=( "--account=${SLURM_ACCOUNT_DEFAULT}" )
 fi
 
 if [ "${SLURM_PARTITION_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--partition" "${SLURM_PARTITION_DEFAULT}" )
+    SLURM_ARGS+=( "--partition=${SLURM_PARTITION_DEFAULT}" )
 fi
 
 if [ "${SLURM_JOB_NAME_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--job-name" "${SLURM_JOB_NAME_DEFAULT}" )
+    SLURM_ARGS+=( "--job-name=${SLURM_JOB_NAME_DEFAULT}" )
 fi
 
 # Reads stdin or file into an array of lines.
@@ -358,22 +365,24 @@ else
 fi
 
 SBATCH_DIRECTIVES=$(printf "#SBATCH ")
+DIRECTIVES=$(printf "#SBATCH %s\n" "${SLURM_ARGS[@]}")
 
 read -r -d '' BATCH_SCRIPT <<EOF || true
 #!/bin/bash --login
+${DIRECTIVES}
 
 set -euo pipefail
 
 ${MODULE_CMD}
 
-$(declare -f gen_slurm_filename)
-LOG_FILE_NAME=\$(gen_slurm_filename '${SLURM_LOG}')
+LOG_FILE_NAME=\$(${DIRNAME}/gen_slurm_filename.py '${SLURM_LOG}')
 
 ${RESUME_CP}
 
 export OMP_NUM_THREADS="\${SLURM_CPUS_PER_TASK:-1}"
 
-cleanup() {
+cleanup()
+{
     EXITCODE="\$?"
     # Put any cleanup in here
 
@@ -399,7 +408,7 @@ trap cleanup EXIT
 SRUN="srun --nodes 1 --ntasks 1 -c\${SLURM_CPUS_PER_TASK:-1} --exact --export=all"
 PARALLEL="parallel --delay 0.5 -j \${SLURM_NTASKS:-1} --joblog \${LOG_FILE_NAME} ${RESUME_ARG}"
 
-\${PARALLEL} "\${SRUN} bash -c {}" <<CMD_EOF
+\${PARALLEL} "\${SRUN} bash -c {}" <<'CMD_EOF'
 ${CMDS}
 CMD_EOF
 EOF
@@ -408,6 +417,6 @@ if [ "${DRY_RUN}" = "true" ]
 then
     echo "${BATCH_SCRIPT}"
 else
-    SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch "${SLURM_ARGS[@]}")
+    SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch --parsable)
     echo ${SLURM_ID}
 fi

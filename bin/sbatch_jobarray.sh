@@ -230,7 +230,7 @@ do
             SLURM_ARGS+=( "${THIS_ARG}" )
         fi
 
-        shift ${SKIP}
+        shift "${SKIP}"
         ;;
     esac
 done
@@ -336,40 +336,11 @@ then
     RESUME="${RESUME_CLEANED}"
     unset RESUME_CLEANED
 
-    if [ "${MIN_NCOLS}" -lt 3 ]
+    if [ "${MIN_NCOLS}" -lt 4 ]
     then
         echo_stderr "ERROR: At least one entry in the file provided to --batch-resume contained ${MIN_NCOLS} columns."
-        echo_stderr "ERROR: We need at least 3 columns to figure out what to do."
+        echo_stderr "ERROR: We need at least 4 columns to figure out what to do."
         exit 1
-    elif [ "${MIN_NCOLS}" -eq 3 ]
-    then
-        readarray -t COMPLETED_INDICES < <(echo "${RESUME}" | awk -F '\t' '$3 == 0 {print $2}' | sort)
-        readarray -t CMDS < <(echo "${CMDS}")
-
-        COMPLETED_CMDS=( )
-        for i in "${COMPLETED_INDICES[@]}"
-        do
-            if [ ${i} -lt ${NJOBS} ]
-            then
-                COMPLETED_CMDS+=( "${CMDS[${i}]}" )
-                unset CMDS[${i}]
-            fi
-        done
-
-        # This is so the indices are normal again
-        if [ "${#CMDS[@]}" -gt 0 ]
-        then
-            CMDS=( "${CMDS[@]}" )
-        fi
-
-
-        echo_stderr '######################################'
-        echo_stderr "Skipping the following commands because they were in the file provided to --batch-resume"
-        for line in "${COMPLETED_CMDS[@]}"
-        do
-            echo_stderr "COMPLETED: ${COMPLETED_CMDS}"
-        done
-
     else
         COMPLETED_CMDS="$(echo -e "${RESUME}" | awk -F '\t' '$3 == 0' | cut -d'	' -f4-)"
 
@@ -378,9 +349,9 @@ then
 
         if [ -z "$( echo '${REMAINING_CMDS}' | sed 's/[[:space:]]//g')" ]
         then
-            CMDS=( )
+            CMDS=""
         else
-            readarray -t CMDS < <(echo "${REMAINING_CMDS}")
+            CMDS="${REMAINING_CMDS}"
         fi
         unset REMAINING_CMDS
 
@@ -391,11 +362,9 @@ then
         echo "${COMPLETED_CMDS}" 1>&2
         unset COMPLETED_CMDS
     fi
-else
-    readarray -t CMDS < <(echo "${CMDS}")
 fi
 
-NJOBS="${#CMDS[@]}"
+NJOBS="$(echo "${CMDS}" | wc -l)"
 
 if [ "${NJOBS}" -eq 0 ]
 then
@@ -441,10 +410,10 @@ ${MODULE_CMD}
 
 JOBID="\${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
 
-$(declare -f gen_slurm_filename)
-LOG_FILE_NAME=\$(gen_slurm_filename '${SLURM_LOG}')
+LOG_FILE_NAME=\$(${DIRNAME}/gen_slurm_filename.py '${SLURM_LOG}')
 
-cleanup() {
+cleanup()
+{
     EXITCODE="\$?"
     rm -f -- \${LOG_FILE_NAME}.lock
 
@@ -464,14 +433,18 @@ cleanup() {
 
 trap cleanup EXIT
 
-read -r -d '' SRUN_SCRIPT <<'EOF_SRUN'  || true
+readarray -t CMDS <<'CMD_EOF' || true
+${CMDS}
+CMD_EOF
+export CMDS
+
+# srun will inherit the resource directives from parent batch script.
+srun --export=all bash -s "\${LOG_FILE_NAME}" <<'EOF_SRUN'
 #!/usr/bin/env bash
 
 set -euo pipefail
 
 LOG_FILE_NAME="\${1}"
-
-$(declare -a -p CMDS)
 
 INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
 
@@ -482,7 +455,8 @@ fi
 
 $(declare -f write_log)
 
-actually_write_log() {
+actually_write_log()
+{
     EXITCODE="\$?"
     write_log "\${LOG_FILE_NAME}" "\${SLURM_JOB_NAME:-\(none\)}" "\${INDEX:-0}" "\${EXITCODE}" "\${CMDS[\${INDEX}]}"
     return "\${EXITCODE}"
@@ -492,13 +466,6 @@ trap actually_write_log EXIT
 
 eval "\${CMDS[\${INDEX}]}"
 EOF_SRUN
-
-echo "\${SRUN_SCRIPT}" \
-| srun --nodes "\${SLURM_JOB_NUM_NODES:-1}" \
-  --ntasks "\${SLURM_NTASKS:-1}" \
-  --cpus-per-task "\${SLURM_CPUS_PER_TASK:-1}" \
-  --export=all \
-  bash -s "\${LOG_FILE_NAME}"
 EOF
 
 if [ "${DRY_RUN}" = "true" ]
