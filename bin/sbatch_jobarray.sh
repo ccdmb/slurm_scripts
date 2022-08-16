@@ -27,7 +27,7 @@ SLURM_STDERR_SET=false
 SLURM_STDERR_DEFAULT="%x-%A_%4a.stderr"
 SLURM_LOG="%x-%A_%4a.log"
 SLURM_EXPORT_SET=false
-SLURM_EXPORT_DEFAULT=NONE
+SLURM_EXPORT_DEFAULT="NONE"
 SLURM_ACCOUNT_SET=false
 SLURM_ACCOUNT_DEFAULT="${PAWSEY_PROJECT:-UNSET}"
 SLURM_PARTITION_SET=false
@@ -88,7 +88,7 @@ Note that unlike GNU parallel and srun, we don't support running functions.
 }
 
 
-SLURM_ARGS=( --parsable )
+SLURM_ARGS=( )
 
 # Here we catch our special parameters and collect the rclone ones
 while [[ $# -gt 0 ]]
@@ -153,25 +153,41 @@ do
         *)
         if isin "$1" "${VALID_SBATCH_FLAGS[@]}"
         then
-            SLURM_ARGS=( "${SLURM_ARGS[@]}" "$1")
+            SLURM_ARGS+=( "$1" )
             shift
             continue
         fi
 
-        THIS_ARG=( $(split_at_equals "$1") )
+        THIS_ARG="${1}"
+        NEXT_ARG="${THIS_ARG#*=}"
+        THIS_ARG="${THIS_ARG%%=*}"
 
-        if [ ${#THIS_ARG[@]} = 2 ]
+        if [ "${THIS_ARG}" != "${NEXT_ARG}" ]
         then
-            NEXT_ARG="${THIS_ARG[1]}"
-            THIS_ARG="${THIS_ARG[0]}"
+            # This means there was an = sign
             SKIP=1
-        elif [[ ! "${2:-}" == "-"* ]]
+        elif [[ ! "${2:-}" = "-"* ]]
         then
             NEXT_ARG="${2:-}"
             SKIP=2
         else
             NEXT_ARG=""
             SKIP=1
+        fi
+
+        # Having -n in an array causes issues for some reason
+        THIS_ARG=$(promote_sbatch_arg "${THIS_ARG}")
+
+        if ! isin "${THIS_ARG}" ${VALID_SBATCH_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SBATCH_ARGS[@]}
+        then
+            echo_stderr "ERROR: Got an invalid parameter ${1}"
+            exit 1
+        fi
+
+        if ( isin "${THIS_ARG}" "${VALID_SBATCH_ARGS[@]}" ) && [ -z "${NEXT_ARG:-}" ]
+        then
+            echo_stderr "ERROR: ${THIS_ARG} expects a value."
+            exit 1
         fi
 
         case "${THIS_ARG}" in
@@ -207,23 +223,14 @@ do
                 ;;
         esac
 
-        if ! isin "${THIS_ARG}" ${VALID_SBATCH_FLAGS_OPTIONAL_VALUE[@]} ${VALID_SBATCH_ARGS[@]}
+        if [ ! -z "${NEXT_ARG:-}" ]
         then
-            break
+            SLURM_ARGS+=( "${THIS_ARG}=${NEXT_ARG}" )
+        else
+            SLURM_ARGS+=( "${THIS_ARG}" )
         fi
 
-        SLURM_ARGS=( "${SLURM_ARGS[@]}" "${THIS_ARG}" )
-
-        if ( isin "${THIS_ARG}" "${VALID_SBATCH_ARGS[@]}" ) && [ -z "${NEXT_ARG:-}" ]
-        then
-            echo_stderr "ERROR: ${THIS_ARG} expects a value."
-            exit 1
-        elif [ ! -z "${NEXT_ARG:-}" ]
-        then
-            SLURM_ARGS=( "${SLURM_ARGS[@]}" "${NEXT_ARG:-}" )
-        fi
-
-        shift "${SKIP}"
+        shift ${SKIP}
         ;;
     esac
 done
@@ -248,28 +255,28 @@ fi
 
 if [ "${SLURM_STDOUT_SET}" = false ] && [ "${SLURM_STDERR_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--output" "${SLURM_STDOUT_DEFAULT}" )
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--error" "${SLURM_STDERR_DEFAULT}" )
+    SLURM_ARGS+=( "--output=${SLURM_STDOUT_DEFAULT}" )
+    SLURM_ARGS+=( "--error=${SLURM_STDERR_DEFAULT}" )
 fi
 
 if [ "${SLURM_EXPORT_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--export" "${SLURM_EXPORT_DEFAULT}" )
+    SLURM_ARGS+=( "--export=${SLURM_EXPORT_DEFAULT}" )
 fi
 
 if [ "${SLURM_ACCOUNT_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--account" "${SLURM_ACCOUNT_DEFAULT}" )
+    SLURM_ARGS+=( "--account=${SLURM_ACCOUNT_DEFAULT}" )
 fi
 
 if [ "${SLURM_PARTITION_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--partition" "${SLURM_PARTITION_DEFAULT}" )
+    SLURM_ARGS+=( "--partition=${SLURM_PARTITION_DEFAULT}" )
 fi
 
 if [ "${SLURM_JOB_NAME_SET}" = false ]
 then
-    SLURM_ARGS=( "${SLURM_ARGS[@]}" "--job-name" "${SLURM_JOB_NAME_DEFAULT}" )
+    SLURM_ARGS+=( "--job-name=${SLURM_JOB_NAME_DEFAULT}" )
 fi
 
 if [ "${PACK}" = true ] && [ -z "${NTASKS:-}" ]
@@ -397,6 +404,26 @@ then
     exit 0
 fi
 
+if [ "${PACK}" = true ]
+then
+    if [ -z "${NTASKS:-}" ]
+    then
+        echo_stderr "ERROR: If you wish to use a packed job (--batch-pack), you must provide --ntasks > 1."
+        exit 1
+    elif [ "${NTASKS:-}" -le 1 ]
+    then
+        echo_stderr "ERROR: If you wish to use a packed job (--batch-pack), you must provide --ntasks > 1."
+        exit 1
+    fi
+    ARRAY_STR="0-$(( ${NJOBS} - 1 )):${NTASKS}"
+else
+    ARRAY_STR="0-$(( ${NJOBS} - 1 ))"
+fi
+
+SLURM_ARGS+=( "--array=${ARRAY_STR}" )
+DIRECTIVES=$(printf "#SBATCH %s\n" "${SLURM_ARGS[@]}")
+
+
 if [ "${#MODULES[@]}" -gt 0 ]
 then
     MODULE_CMD="module load ${MODULES[@]}"
@@ -406,6 +433,7 @@ fi
 
 read -r -d '' BATCH_SCRIPT <<EOF || true
 #!/bin/bash --login
+${DIRECTIVES}
 
 set -euo pipefail
 
@@ -441,6 +469,8 @@ read -r -d '' SRUN_SCRIPT <<'EOF_SRUN'  || true
 
 set -euo pipefail
 
+LOG_FILE_NAME="\${1}"
+
 $(declare -a -p CMDS)
 
 INDEX="\$(( \${SLURM_ARRAY_TASK_ID:-0} + \${SLURM_PROCID:-0} ))"
@@ -450,17 +480,12 @@ then
     exit 0
 fi
 
-# Yeah i know we are redefining this, but i dont want
-# to remove the quotes from the eof because then id have to
-# escape more.
-$(declare -f gen_slurm_filename)
-LOG_FILE_NAME=\$(gen_slurm_filename '${SLURM_LOG}')
-
 $(declare -f write_log)
 
 actually_write_log() {
     EXITCODE="\$?"
     write_log "\${LOG_FILE_NAME}" "\${SLURM_JOB_NAME:-\(none\)}" "\${INDEX:-0}" "\${EXITCODE}" "\${CMDS[\${INDEX}]}"
+    return "\${EXITCODE}"
 }
 
 trap actually_write_log EXIT
@@ -473,32 +498,13 @@ echo "\${SRUN_SCRIPT}" \
   --ntasks "\${SLURM_NTASKS:-1}" \
   --cpus-per-task "\${SLURM_CPUS_PER_TASK:-1}" \
   --export=all \
-  bash
+  bash -s "\${LOG_FILE_NAME}"
 EOF
-
-if [ "${PACK}" = true ]
-then
-    if [ -z "${NTASKS:-}" ]
-    then
-        echo_stderr "ERROR: If you wish to use a packed job (--batch-pack), you must provide --ntasks > 1."
-        exit 1
-    elif [ "${NTASKS:-}" -le 1 ]
-    then
-        echo_stderr "ERROR: If you wish to use a packed job (--batch-pack), you must provide --ntasks > 1."
-        exit 1
-    fi
-    ARRAY_STR="0-$(( ${NJOBS} - 1 )):${NTASKS}"
-else
-    ARRAY_STR="0-$(( ${NJOBS} - 1 ))"
-fi
 
 if [ "${DRY_RUN}" = "true" ]
 then
-    echo "RUNNING AS:"
-    echo "sbatch --array='${ARRAY_STR}' ""${SLURM_ARGS[@]}"
-    echo "WITH BATCH SCRIPT:"
     echo "${BATCH_SCRIPT}"
 else
-    SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch --array="${ARRAY_STR}" "${SLURM_ARGS[@]}")
+    SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch --parsable)
     echo ${SLURM_ID}
 fi
