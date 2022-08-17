@@ -909,7 +909,12 @@ def main():
             sys.exit(1)
 
         if cmd == args.pattern:
-            cmd = cmd + " '" + "' '".join(line) + "'"
+            if isinstance(line, str):
+                cmd = cmd + " '" + "' '".join(line) + "'"
+            elif isinstance(line, list):
+                cmd = cmd + " '" + "' '".join(map(str, flatten_lists(line))) + "'"
+            else:
+                raise ValueError("This shouldn't happen")
 
         # Replacess {{ with { etc
         cmd = re.sub(r"(?P<paren>[{}])(?P=paren)\s*", r"\g<paren>", cmd)
