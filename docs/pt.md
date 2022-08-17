@@ -9,6 +9,14 @@ The templating syntax is inspired by [GNU Parallel replacement strings](https://
 Nothing quite did everything that I needed as is, so it's a hybrid.
 
 
+## Installation
+
+This script is a standalone python script.
+As long as you have python 3 (>3.7) installed on your PATH it should be able to be copied wherever you like.
+
+
+## Quickstart
+
 There are several options, but it's easiest to demonstrate before going into technical details.
 
 First I'll generate some example files to demonstrate with...
@@ -21,6 +29,9 @@ touch {dir1,dir2}/{one,two,three}-{R1,R2}.fastq.gz
 
 I'm using paired fastq reads as an example because it is a common use case for some of the grouping options supported.
 Throughout this guide, we'll use a hypothetical command `map.sh` as an example.
+
+
+### Basic input
 
 `pt` can take parameters as either a globbed pattern or a TSV table.
 A basic command will look like:
@@ -90,6 +101,7 @@ So here the brace expansion `{R1,R2}` will determine how the files are grouped.
 And together with the wildcard `*`, the command expands to list all `-R1.fastq.gz` files then the `-R2.fastq.gz` files.
 `pt` relies on this ordering to associate the parameters with each other.
 As long as the order is correct it will be fine, so you could just provide the list of files if you want. But if the order is out or the `--nparams` doesn't match the order properly, it will give you weird results.
+A common error might be to have multiple brace patterns (e.g. `{one,two,three}{four,five,six}`, which will expand in an incompatible way. You can only have one brace expansion in your glob.
 
 Make sure that there are no spaces in the braces (or make sure to use quoting), as they won't expand as you might expect.
 e.g.
@@ -121,6 +133,8 @@ When there is one parameter `{}` is an alias for `{0}`, but with more than one i
 Indexing is 0 based (start inclusive and end exclusive), just like python.
 
 
+### String manipulation
+
 And with that we're ready to look at some of the extra template syntax.
 Within the `{...}` blocks, we can provide commands to perform actions on the parameters.
 Some basic ones are `d` which returns the directory name, `b` with returns the filename without the directory, and `e` which strips an extension off the end of the file.
@@ -137,6 +151,9 @@ pt --nparams 2 'map.sh --out "{0r/-R1.fastq.gz/}.bam" --r2 "{1}" --r1 "{0}"' dir
 
 You can combine commands to perform more complex operations.
 For example in the above example, we could also strip the directory name from the output file `{0dr/-R1.fastq.gz/}.bam`, which will create `one.bam` instead of `dir1/one.bam` etc.
+
+
+### Array manipulation
 
 Most of the above could be done with GNU parallel style syntax, but things here can get a bit more exotic when you use the array syntax.
 We'll go into this in more detail later, but briefly `{@}` will give you access to all parameters associated with the command (e.g. `[dir1/one-R2.fastq.gz, dir1/one-R1.fastq.gz]`). We can perform operations on this array as well as the strings inside it.
@@ -182,6 +199,8 @@ pt --nparams 2 --group '{0d}' 'map.sh --out "{0d}.bam" --r1 "{0@j/,/}" --r2 "{1@
 ```
 
 
+### Taking parameters from a table
+
 OK. So the globbing patterns are good for when you have fairly regular files and easy globbing patterns, but sometimes it's easier to just provide a TSV file with your parameters already.
 
 E.g. in the paired run option above, you could have a file `reads.tsv` like below:
@@ -215,7 +234,13 @@ You could even add extra metadata columns (e.g. FASTQ read groups) and use that 
 So there's a lot of flexibility in the system, and it will all automatically submit the appropriate number of jobs depending on grouping parameters etc.
 
 
-## String commands
+## Command syntax
+
+Most commands in `pt` are formed from a single letter and provide options to operate on strings, or an array of strings.
+Some commands take arguments (e.g. patterns to substitute or remove), which are provided with pattern boundaries directly after the command.
+The pattern boundaries are two of the same characters with the argument between the characters, e.g. in `l/argument/`, `/` is used as the pattern boundary and the argument is `argument`.
+
+### String commands
 
 - `b` basename `pt "{b}" dir/one.fastq.gz  # one.fastq.gz`
 - `d` dirname `pt "{d}" dir/one.fastq.gz  # dir`
@@ -248,6 +273,16 @@ This will allow `pt` to return an empty string.
 
 `o` commands without pattern boundaries that are in the middle of the template block will still raise an error.
 
+
+### command pattern boundaries
+
+Some of the commands take arguments from a pair of boundary characters.
+In the above examples we've used `/` as this boundary character, as it's the standard one for regular expressions.
+But if you had to match a literal `/` in the argument, you'd have to backslash escape it. Otherwise the pattern will pick up the wrong closing boundary character.
+`pt` also supports the use of characters `|%&~` as boundary characters, so e.g. if you wanted to add a new directory to the filename, you could use `pt "{s~dir/~nested/dirs/~}" dir/one.fastq.gz  # nested/dirs/one.fastq.gz`. No need to escape!
+As long as all of the boundary characters are the same, any of those characters will work.
+
+
 ### Spacing
 
 Any spacing (except newlines) outside of the pattern boundaries is ignored, so you can make things a bit more readable.
@@ -276,16 +311,8 @@ We assign the lowercase variants to what we expect will be the most useful/commo
 - `Q` Uses backslash escaping instead of single quotes. Say your path had a space in it... `pt "{q}" 'dir/on e.fastq.gz'  # dir/my\ data.fastq.gz` compare to `pt "{q}" 'dir/on e.fastq.gz'  # 'dir/my data.fastq.gz'`.
 
 
-### command pattern boundaries
 
-Some of the commands take arguments from a pair of boundary characters.
-In the above examples we've used `/` as this boundary character, as it's the standard one for regular expressions.
-But if you had to match a literal `/` in the argument, you'd have to backslash escape it. Otherwise the pattern will pick up the wrong closing boundary character.
-`pt` also supports the use of characters `|%&~` as boundary characters, so e.g. if you wanted to add a new directory to the filename, you could use `pt "{s~dir/~nested/dirs/~}" dir/one.fastq.gz  # nested/dirs/one.fastq.gz`. No need to escape!
-As long as all of the boundary characters are the same, any of those characters will work.
-
-
-## Array commands
+### Array commands
 
 You can access the arrays using the `@` operator at the beginning of the template pattern.
 

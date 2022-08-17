@@ -300,7 +300,7 @@ CMDS=$(cat "${INFILE}" | sort)
 # We want to fail early on empty lines or duplicate commands so that everything runs as expected
 
 # The grep removes any empty lines and lines starting with a # (comments)
-CMDS_SPACE=$(echo "${CMDS}" | grep -v '^[[:space:]]*$\|^[[:space:]]*#' | sort)
+CMDS_SPACE=$(echo "${CMDS}" | { grep -v '^[[:space:]]*$\|^[[:space:]]*#' || true; } | sort)
 
 if ! diff <(echo "${CMDS}") <(echo "${CMDS_SPACE}") 1>&2
 then
@@ -321,11 +321,11 @@ fi
 unset CMDS_SPACE
 unset CMDS_UNIQUE
 
-NJOBS=$(echo "${CMDS}" | wc -l)
+NJOBS=$(echo "${CMDS}" | { grep -v '^[[:space:]]*$' || true; } | wc -l)
 
 if [ "${NJOBS}" -eq 0 ]
 then
-    echo_sterr "ERROR: We didnt get any tasks to run!"
+    echo_stderr "ERROR: We didnt get any tasks to run!"
     exit 1
 fi
 
@@ -364,7 +364,7 @@ then
     fi
 fi
 
-NJOBS="$(echo "${CMDS}" | wc -l)"
+NJOBS="$(echo "${CMDS}" | { grep -v '^[[:space:]]*$' || true; } | wc -l)"
 
 if [ "${NJOBS}" -eq 0 ]
 then

@@ -9,6 +9,7 @@ TIME="$(date +'%Y%m%d-%H%M%S')"
 DRY_RUN=false
 
 source "${DIRNAME}/../lib/cli.sh"
+source "${DIRNAME}/../lib/general.sh"
 source "${DIRNAME}/../lib/batch.sh"
 
 VALID_SUBCOMMANDS=( fn sh str )
@@ -77,12 +78,12 @@ then
     exit 1
 fi
 
-if [[ ! "${DEPENDENT}" =~ ^[[:space:]]*[0-9]+[[:space:]]*$ ]]
-then
-    echo_stderr "ERROR: the second argument ('${DEPENDENT}') is not an integer"
-    usage_err
-    exit 1
-fi
+#if [[ ! "${DEPENDENT}" =~ ^[[:space:]]*[0-9]+[[:space:]]*$ ]]
+#then
+#    echo_stderr "ERROR: the second argument ('${DEPENDENT}') is not an integer"
+#    usage_err
+#    exit 1
+#fi
 
 case "${SUBCOMMAND}" in
     fn)
@@ -114,6 +115,6 @@ $(declare -f update_dependencies)
 update_dependencies "\${SLURM_JOB_ID}" "\${NEW_JOB_ID}"
 EOF
 
-SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch --dependency="${DEP}")
+SLURM_ID=$(echo "${BATCH_SCRIPT}" | sbatch --dependency="${DEP}" --partition=debug)
 
 echo "${SLURM_ID}"

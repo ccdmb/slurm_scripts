@@ -8,7 +8,7 @@ Unfortunately, there is a limit on how many tasks you can submit with a job-arra
 
 ## Instructions
 
-This program takes commands in from stdin or a file and submits each line as a separate task.
+This program takes commands in from stdin and submits each line as a separate task.
 It automatically generates an appropriate job-array batch script from these inputs, and can also pack tasks within job-array tasks for larger jobs where shared node access isn't available.
 This program also provides options for logging job exit codes, which can be used to resume the job and skip and previously successfully completed tasks.
 
@@ -30,7 +30,7 @@ The `--ntasks 5` tells slurm you'll be running 5 MPI tasks, and `--batch-pack` t
 Say the file `cmds.sh` contained 20 commands to run.
 
 ```
-sbatch_jobarray.sh --cpus-per-task 4 --ntasks 5 --batch-pack ./cmds.sh
+sbatch_jobarray.sh --cpus-per-task 4 --ntasks 5 --batch-pack < ./cmds.sh
 ```
 
 So now each job-array job will be allocated 20 CPUs (4 * 5), and there will only be 4 jobs in the job-array, because each packs 5 commands.
@@ -49,7 +49,9 @@ For the simpler case, the `pt` script can be really helpful, and it was designed
 pt --nparams 'map.sh --in2 {0} --in2 {1}' *-{R1,R2}.fastq.gz | sbatch_jobarray.sh --cpus-per-task 8
 ```
 
-When you run the job for real (without `--batch-dry-run`), the program will just echo the created SLURM job id, which you can use for job dependencies.
+If you use the `--batch-dry-run` flag, the program will generate a SLURM batch script for you.
+You could use this batch script to submit separately with `sbatch` yourself if you wanted, e.g. if you wanted to edit something specific.
+If you run the job without `--batch-dry-run`, the program submit the job with `sbatch` and echo the created SLURM job id, which you can use for job dependencies.
 
 
 ### Command line arguments

@@ -4,7 +4,7 @@
 It has the same basic API as [`sbatch_jobarray.sh`](./sbatch_jobarray.md) and is designed to run with [`pt`](./pt.md).
 
 This strategy works best if you have a lot of jobs to run (say > 100), that are relatively small (e.g. single threaded), but may have different job runtimes while still being relatively quick (say <= 3 hours). It's also best if you allocate substantially fewer resources to the process than there are tasks.
-E.g. if you had 200 tasks to run, run it so that ~10-20 tasks can run at once. If you allocate a lot of resources then you'll be wasting CPU time if one or two jobs take a very long time, but others are quite short. If you have long running tasks or tasks that require a lot of resources (e.g. a whole node), it's better to use a jobarray as these will stop billing you for CPU time as soon as they complete (assuming you aren't packing jobs).
+E.g. if you had 200 tasks to run, run it so that ~10-20 tasks can run at once. If you allocate a lot of resources then you'll be wasting CPU time if one or two jobs take a very long time but others are quite short. If you have long running tasks or tasks that require a lot of resources (e.g. a whole node), it's better to use a jobarray as these will stop billing you for CPU time as soon as they complete (assuming you aren't packing jobs).
 
 ## Instructions
 
@@ -17,7 +17,7 @@ The basic design is fairly simple and for the most part the command line argumen
 You can think of this script as creating a mini-cluster, and GNU parallel will submit the tasks as others finish.
 So you specify how many tasks you would like to run concurrently using `--ntasks`, and how many cpus each task should have access to with `--cpus-per-task`. Then you can provide as many commands as you want to STDIN, and parallel will keep submitting jobs within this allocation (without you having to wait in the SLURM queue, and without limits on how many jobs you can run [job arrays are capped at 300]).
 
-Here's an example using a bash HEREDOC, allocating 4 cpus per task and running each line as a separate task (which will be managed by the SLURM queue).
+Here's an example using a bash HEREDOC, allocating 4 cpus per task and running each line as a separate task (which will be managed by GNU parallel).
 
 ```
 sbatch_parallel.sh --ntasks 2 --cpus-per-task 4 <<EOF
@@ -28,7 +28,7 @@ echo "four"
 EOF
 ```
 
-Will run 2 tasks running in parallel, and `echo three` will be submitted whenever either one or three is finished.
+Will run 2 tasks in parallel, and `echo three` will be submitted whenever either `echo one` or `echo two` is finished.
 Unfortunately because GNU parallel is using MPI to run the tasks internally, you cannot submit MPI tasks to be run with this method.
 
 We take commands in line by line because it's the most flexible system, but it does mean that you can't submit jobs that include newlines.
@@ -41,14 +41,20 @@ For the simpler case, the `pt` script can be really helpful, and it was designed
 pt --nparams 'map.sh --in2 {0} --in2 {1}' *-{R1,R2}.fastq.gz | sbatch_parallel.sh --cpus-per-task 1 --ntasks 2
 ```
 
-When you run the job for real (without `--batch-dry-run`), the program will just echo the created SLURM job id, which you can use for job dependencies.
+If you add the parameter `--batch-resume previous_run.log` then this log will be passed to the GNU parallel `--resume-failed` parameter. This will use the exit codes to retry the execution of previously failed tasks based on the command string, and will also run any new commands given.
+
+Note that unlike `sbatch_jobarray.sh` if there are no-new tasks to run, `sbatch_parallel.sh` will still submit a job to the queue (but parallel will exit almost immediately as it will determine that there are no tasks to run).
+
+
+If you use the `--batch-dry-run` flag, the program will generate a SLURM batch script for you.
+You could use this batch script to submit separately with `sbatch` yourself if you wanted, e.g. if you wanted to edit something specific.
+If you run the job without `--batch-dry-run`, the program submit the job with `sbatch` and echo the created SLURM job id, which you can use for job dependencies.
 
 
 ### Command line arguments
 
 ```
-This script wraps SLURM job-arrays up in a more convenient way to perform embarassing parallelism from a glob of files.
-All
+This script wraps a GNU parallel task up in a SLURM sbatch script to perform embarassing parallelism from a file of commands.
 
 It requires SLURM installed in your environment.
 
@@ -60,14 +66,14 @@ Parameters:
   --error -- The output filename of the job stderr. default "%x-%A_%4a.stderr"
   --batch-log -- Log the job exit codes here so we can restart later. default "%x-%A_%4a.log"
   --batch-resume -- Resume the jobarray, skipping previously successful jobs according to the file provided here.
-  --batch-dry-run -- Print the command that will be run and exit.
+  --batch-dry-run -- Print the sbatch file that will be run and exit.
   --batch-module -- Include this module the sbatch script. Can be specified multiple times.
   --batch-parallel-module -- Module needed to load GNU parallel. Takes a default argument from environment variable SLURM_SCRIPTS_PARALLEL_MODULE. If that is empty, assumes that parallel is already on your PATH.
   --batch-help -- Show this help and exit.
   --batch-debug -- Sets verbose logging so you can see what's being done.
   --batch-version -- Print the version and exit.
 
-All other parameters, flags and arguments before '--' are passed to sbatch as is.
+All other parameters, flags and arguments are passed to sbatch as is.
 See: https://slurm.schedmd.com/sbatch.html
 
 Note: you can't provide the --array flag, as parallelism is handled a different way and it will raise an error.
