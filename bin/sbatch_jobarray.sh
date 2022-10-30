@@ -13,6 +13,7 @@ DRY_RUN=false
 PACK=false
 RESUME=
 MODULES=( )
+CONDAENV=
 
 INFILE=/dev/stdin
 
@@ -72,6 +73,7 @@ Parameters:
   --batch-pack -- Pack the job so that multiple tasks run per job array job. Uses the value of --ntasks to determine how many to run per job.
   --batch-dry-run -- Print the command that will be run and exit.
   --batch-module -- Include this module the sbatch script. Can be specified multiple times.
+  --batch-condaenv -- Load this conda environment.
   --batch-help -- Show this help and exit.
   --batch-debug -- Sets verbose logging so you can see what's being done.
   --batch-version -- Print the version and exit.
@@ -99,6 +101,11 @@ do
         --batch-module)
             check_param "--batch-module" "${2:-}"
             MODULES+=( "${2}" )
+            shift 2
+            ;;
+        --batch-condaenv)
+            check_param "--batch-condaenv" "${2:-}"
+            CONDAENV="${2}"
             shift 2
             ;;
         --batch-log)
@@ -400,10 +407,18 @@ else
     MODULE_CMD=""
 fi
 
+if [ -z "${CONDAENV}" ]
+then
+    CONDAENV_CMD=""
+else
+    CONDAENV_CMD="conda activate '${CONDAENV}'"
+fi
+
 read -r -d '' BATCH_SCRIPT <<EOF || true
 #!/bin/bash --login
 ${DIRECTIVES}
 
+${CONDAENV_CMD}
 set -euo pipefail
 
 ${MODULE_CMD}
