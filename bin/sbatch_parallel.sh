@@ -385,10 +385,9 @@ read -r -d '' BATCH_SCRIPT <<EOF || true
 #!/bin/bash --login
 ${DIRECTIVES}
 
+${MODULE_CMD}
 ${CONDAENV_CMD}
 set -euo pipefail
-
-${MODULE_CMD}
 
 LOG_FILE_NAME=\$(${DIRNAME}/gen_slurm_filename.py '${SLURM_LOG}')
 

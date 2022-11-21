@@ -418,10 +418,9 @@ read -r -d '' BATCH_SCRIPT <<EOF || true
 #!/bin/bash --login
 ${DIRECTIVES}
 
+${MODULE_CMD}
 ${CONDAENV_CMD}
 set -euo pipefail
-
-${MODULE_CMD}
 
 JOBID="\${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
 
